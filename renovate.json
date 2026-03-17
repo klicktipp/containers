@@ -8,5 +8,17 @@
     "docker:pinDigests",
     ":pinDevDependencies",
     "helpers:pinGitHubActionDigests"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/Dockerfile/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s*depName=(?<depName>\\S+)(?:\\s*versioning=(?<versioning>\\S+))?[\\s\\S]*?_VERSION\\s*=\\s*(?<currentValue>[^\n\r]*)"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    }
   ]
 }
