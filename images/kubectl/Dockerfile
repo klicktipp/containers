@@ -12,12 +12,14 @@ ARG IMAGE_SOURCE="https://github.com/klicktipp/containers"
 RUN curl --fail --silent --show-error --location --output /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
     && chmod 0755 /tmp/kubectl
 
-FROM scratch
+FROM alpine:3.23
 
 ARG IMAGE_DESCRIPTION
 ARG IMAGE_AUTHORS
 ARG IMAGE_VENDOR
 ARG IMAGE_SOURCE
+
+RUN apk add --no-cache ca-certificates
 
 LABEL org.opencontainers.image.authors="${IMAGE_AUTHORS}" \
       org.opencontainers.image.description="${IMAGE_DESCRIPTION}" \
@@ -25,6 +27,5 @@ LABEL org.opencontainers.image.authors="${IMAGE_AUTHORS}" \
       org.opencontainers.image.vendor="${IMAGE_VENDOR}"
 
 COPY --from=fetcher /tmp/kubectl /usr/local/bin/kubectl
-COPY --from=fetcher /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 ENTRYPOINT ["/usr/local/bin/kubectl"]
