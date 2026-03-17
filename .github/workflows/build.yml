@@ -8,6 +8,9 @@ on:
       - ".github/workflows/build.yml"
       - "images/**"
       - "README.md"
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 jobs:
@@ -28,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "release" ]]; then
             mapfile -t image_dirs < <(find images -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
           else
             before="${{ github.event.before }}"
@@ -144,6 +147,7 @@ jobs:
             type=raw,value=${{ steps.version.outputs.version_plain }},enable=${{ steps.version.outputs.version_plain != '' && steps.version.outputs.version_plain != steps.version.outputs.version }}
             type=raw,value=${{ steps.version.outputs.version_minor }},enable=${{ steps.version.outputs.version_minor != '' }}
             type=raw,value=${{ steps.version.outputs.version_major }},enable=${{ steps.version.outputs.version_major != '' }}
+            type=ref,event=tag,enable=${{ github.event_name == 'release' }}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
