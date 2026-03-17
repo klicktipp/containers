@@ -9,12 +9,12 @@ This repository contains Docker image definitions intended for public distributi
 - `.github/workflows/push.yml`: main branch and manual publishing workflow
 - `.github/workflows/release.yml`: automatic GitHub release workflow after successful image publishing
 
-## Version tags
+## Metadata
 
-Version tags and image descriptions are derived from the image Dockerfile.
+Version tags and image metadata are derived from the image Dockerfile.
 
 - Add `# image-version: <ARG_NAME>` above the primary version argument when the image should publish version tags
-- Add `# image-description: <TEXT>` when the image should publish a human-readable OCI description
+- Define `ARG IMAGE_DESCRIPTION=...`, `ARG IMAGE_AUTHORS=...`, `ARG IMAGE_VENDOR=...`, and `ARG IMAGE_SOURCE=...` when the image should publish OCI metadata
 - Define that argument as `ARG <ARG_NAME>=...`
 - The workflow publishes `latest`, `sha-...`, the full version, and a major-minor tag when a primary version is available
 

@@ -76,14 +76,23 @@ jobs:
           set -euo pipefail
 
           dockerfile_path="${{ matrix.context }}/Dockerfile"
-          description="$(
-            awk -F': ' '/^# image-description: / { print $2; exit }' "${dockerfile_path}"
-          )"
+          arg_value() {
+            local key="$1"
+            awk -F= -v key="${key}" '$1 == "ARG " key { print $2; exit }' "${dockerfile_path}"
+          }
+
+          description="$(arg_value IMAGE_DESCRIPTION)"
+          authors="$(arg_value IMAGE_AUTHORS)"
+          vendor="$(arg_value IMAGE_VENDOR)"
+          source="$(arg_value IMAGE_SOURCE)"
           version_arg_name="$(
             awk -F': ' '/^# image-version: / { print $2; exit }' "${dockerfile_path}"
           )"
 
           echo "description=${description}" >> "${GITHUB_OUTPUT}"
+          echo "authors=${authors}" >> "${GITHUB_OUTPUT}"
+          echo "vendor=${vendor}" >> "${GITHUB_OUTPUT}"
+          echo "source=${source}" >> "${GITHUB_OUTPUT}"
 
           if [[ -z "${version_arg_name}" ]]; then
             version_arg_name="$(
@@ -101,9 +110,7 @@ jobs:
             exit 0
           fi
 
-          version="$(
-            awk -F= -v key="${version_arg_name}" '$1 == "ARG " key { print $2; exit }' "${dockerfile_path}"
-          )"
+          version="$(arg_value "${version_arg_name}")"
           version_plain="${version#v}"
           version_major_prefixed="v$(printf '%s\n' "${version_plain}" | cut -d. -f1)"
           version_major="$(printf '%s\n' "${version_plain}" | cut -d. -f1)"
@@ -123,7 +130,10 @@ jobs:
         with:
           images: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}
           labels: |
+            org.opencontainers.image.authors=${{ steps.image_meta.outputs.authors }}
             org.opencontainers.image.description=${{ steps.image_meta.outputs.description }}
+            org.opencontainers.image.source=${{ steps.image_meta.outputs.source }}
+            org.opencontainers.image.vendor=${{ steps.image_meta.outputs.vendor }}
           annotations: |
             org.opencontainers.image.description=${{ steps.image_meta.outputs.description }}
           tags: |
