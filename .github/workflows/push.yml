@@ -1,13 +1,16 @@
-name: Build Docker Images
+name: Push Docker Images
 
 on:
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
       - ".github/workflows/build.yml"
       - ".github/workflows/push.yml"
       - ".github/workflows/release.yml"
       - "images/**"
       - "README.md"
+  workflow_dispatch:
 
 jobs:
   detect-images:
@@ -27,11 +30,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          mapfile -t image_dirs < <(
-            git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" \
-              | awk -F/ '/^images\/[^/]+\// { print $2 }' \
-              | sort -u
-          )
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            mapfile -t image_dirs < <(find images -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
+          else
+            before="${{ github.event.before }}"
+            after="${{ github.sha }}"
+
+            if [[ -z "${before}" || "${before}" == "0000000000000000000000000000000000000000" ]]; then
+              mapfile -t image_dirs < <(find images -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
+            else
+              mapfile -t image_dirs < <(
+                git diff --name-only "${before}" "${after}" \
+                  | awk -F/ '/^images\/[^/]+\// { print $2 }' \
+                  | sort -u
+              )
+            fi
+          fi
 
           if (( ${#image_dirs[@]} == 0 )); then
             echo 'matrix={"include":[]}' >> "${GITHUB_OUTPUT}"
@@ -46,7 +60,7 @@ jobs:
 
           echo "matrix=${matrix_json}" >> "${GITHUB_OUTPUT}"
 
-  build:
+  push:
     runs-on: ubuntu-latest
     needs: detect-images
     if: ${{ fromJson(needs.detect-images.outputs.matrix).include[0] != null }}
@@ -55,6 +69,7 @@ jobs:
       IMAGE_NAMESPACE: ${{ github.repository_owner }}
     permissions:
       contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.detect-images.outputs.matrix) }}
@@ -62,6 +77,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -125,15 +147,15 @@ jobs:
             type=raw,value=${{ steps.version.outputs.version_minor }},enable=${{ steps.version.outputs.version_minor != '' }}
             type=raw,value=${{ steps.version.outputs.version_major }},enable=${{ steps.version.outputs.version_major != '' }}
             type=sha
-            type=raw,value=latest,enable=false
+            type=raw,value=latest,enable=${{ github.ref_name == github.event.repository.default_branch }}
 
-      - name: Build ${{ matrix.name }}
+      - name: Push ${{ matrix.name }}
         uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.context }}/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: false
+          push: true
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
