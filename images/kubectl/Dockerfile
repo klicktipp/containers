@@ -5,12 +5,12 @@ FROM curlimages/curl:8.18.0 AS fetcher
 ARG KUBECTL_VERSION=v1.31.0
 ARG TARGETARCH
 
-RUN curl --fail --silent --show-error --location --output /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
-    && chmod 0755 /usr/local/bin/kubectl
+RUN curl --fail --silent --show-error --location --output /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+    && chmod 0755 /tmp/kubectl
 
 FROM scratch
 
-COPY --from=fetcher /usr/local/bin/kubectl /usr/local/bin/kubectl
+COPY --from=fetcher /tmp/kubectl /usr/local/bin/kubectl
 COPY --from=fetcher /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 ENTRYPOINT ["/usr/local/bin/kubectl"]
