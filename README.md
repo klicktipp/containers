@@ -7,13 +7,14 @@ This repository contains Docker image definitions intended for public distributi
 - `images/<name>/Dockerfile`: one image per subdirectory
 - `.github/workflows/build.yml`: pull request build validation workflow
 - `.github/workflows/push.yml`: main branch and manual publishing workflow
-- `.github/workflows/release.yml`: release workflow for full image publishing and release notes
+- `.github/workflows/release.yml`: automatic GitHub release workflow after successful image publishing
 
-## Version tags
+## Metadata
 
-Version tags are derived from the image Dockerfile.
+Version tags and image metadata are derived from the image Dockerfile.
 
 - Add `# image-version: <ARG_NAME>` above the primary version argument when the image should publish version tags
+- Define `ARG IMAGE_DESCRIPTION=...`, `ARG IMAGE_AUTHORS=...`, `ARG IMAGE_VENDOR=...`, and `ARG IMAGE_SOURCE=...` when the image should publish OCI metadata
 - Define that argument as `ARG <ARG_NAME>=...`
 - The workflow publishes `latest`, `sha-...`, the full version, and a major-minor tag when a primary version is available
 
@@ -33,4 +34,4 @@ On pull requests, the build workflow validates only the changed images without p
 
 On `main` and manual runs, the push workflow publishes only changed images.
 
-On published GitHub releases, the release workflow builds all images, applies the release tag in addition to the image version tags, and updates the release notes with image-specific changes since the previous release.
+After a successful publishing run, the release workflow creates or updates an automated GitHub release for the published commit and includes image-specific changes since the previous automated release.

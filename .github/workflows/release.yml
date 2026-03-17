@@ -1,43 +1,16 @@
 name: Release Docker Images
 
 on:
-  release:
+  workflow_run:
+    workflows:
+      - Push Docker Images
     types:
-      - published
+      - completed
 
 jobs:
-  detect-images:
+  release:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.collect.outputs.matrix }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Collect all images
-        id: collect
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mapfile -t image_dirs < <(find images -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
-
-          if (( ${#image_dirs[@]} == 0 )); then
-            echo 'matrix={"include":[]}' >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          matrix_json="$(
-            printf '%s\n' "${image_dirs[@]}" \
-              | jq -R '{name: ., context: ("./images/" + .)}' \
-              | jq -cs '{include: .}'
-          )"
-
-          echo "matrix=${matrix_json}" >> "${GITHUB_OUTPUT}"
-
-  release-notes:
-    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == github.event.repository.default_branch }}
     permissions:
       contents: write
 
@@ -46,22 +19,26 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Generate image-specific release notes
-        id: notes
+      - name: Generate release data
+        id: release_data
         shell: bash
         run: |
           set -euo pipefail
 
-          current_tag="${{ github.event.release.tag_name }}"
+          head_sha="${{ github.event.workflow_run.head_sha }}"
+          short_sha="${head_sha:0:12}"
+          current_tag="main-${short_sha}"
           previous_tag="$(
-            git tag --sort=-creatordate \
-              | grep -Fxv "${current_tag}" \
+            git tag --list 'main-*' --sort=-creatordate \
               | head -n1 || true
           )"
-          notes_file="$(mktemp)"
+          body_file="$(mktemp)"
 
           {
+            echo "Automated release for commit \`${short_sha}\`."
+            echo
             echo "<!-- image-release-notes:start -->"
             echo "## Image Changes"
             echo
@@ -75,11 +52,11 @@ jobs:
 
               if [[ -n "${previous_tag}" ]]; then
                 commits="$(
-                  git log --reverse --format='- %s (%h)' "${previous_tag}..${current_tag}" -- "${image_dir}" || true
+                  git log --reverse --format='- %s (%h)' "${previous_tag}..${head_sha}" -- "${image_dir}" || true
                 )"
               else
                 commits="$(
-                  git log --reverse --format='- %s (%h)' "${current_tag}" -- "${image_dir}" || true
+                  git log --reverse --format='- %s (%h)' "${head_sha}" -- "${image_dir}" || true
                 )"
               fi
 
@@ -100,9 +77,12 @@ jobs:
             fi
 
             echo "<!-- image-release-notes:end -->"
-          } > "${notes_file}"
+          } > "${body_file}"
 
-          echo "body_path=${notes_file}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${current_tag}" >> "${GITHUB_OUTPUT}"
+          echo "name=main ${short_sha}" >> "${GITHUB_OUTPUT}"
+          echo "target=${head_sha}" >> "${GITHUB_OUTPUT}"
+          echo "body_path=${body_file}" >> "${GITHUB_OUTPUT}"
 
       - name: Update GitHub release body
         uses: actions/github-script@v8
@@ -110,121 +90,41 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const markerStart = '<!-- image-release-notes:start -->';
-            const markerEnd = '<!-- image-release-notes:end -->';
-            const generatedBlock = fs.readFileSync('${{ steps.notes.outputs.body_path }}', 'utf8').trim();
-            const release = context.payload.release;
-            const currentBody = release.body || '';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = '${{ steps.release_data.outputs.tag }}';
+            const name = '${{ steps.release_data.outputs.name }}';
+            const target = '${{ steps.release_data.outputs.target }}';
+            const body = fs.readFileSync('${{ steps.release_data.outputs.body_path }}', 'utf8');
 
-            const blockRegex = new RegExp(`${markerStart}[\\s\\S]*?${markerEnd}`, 'm');
-            const nextBody = blockRegex.test(currentBody)
-              ? currentBody.replace(blockRegex, generatedBlock)
-              : (currentBody ? `${currentBody}\n\n${generatedBlock}` : generatedBlock);
+            let existing = null;
+            try {
+              const response = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+              existing = response.data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
 
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.id,
-              body: nextBody,
-            });
-
-  build:
-    runs-on: ubuntu-latest
-    needs: detect-images
-    if: ${{ fromJson(needs.detect-images.outputs.matrix).include[0] != null }}
-    env:
-      IMAGE_REGISTRY: ghcr.io
-      IMAGE_NAMESPACE: ${{ github.repository_owner }}
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.detect-images.outputs.matrix) }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Extract image version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          dockerfile_path="${{ matrix.context }}/Dockerfile"
-          version_arg_name="$(
-            awk -F': ' '/^# image-version: / { print $2; exit }' "${dockerfile_path}"
-          )"
-
-          if [[ -z "${version_arg_name}" ]]; then
-            version_arg_name="$(
-              awk -F'[ =]' '/^ARG [A-Z0-9_]+_VERSION=/{print $2; exit}' "${dockerfile_path}"
-            )"
-          fi
-
-          if [[ -z "${version_arg_name}" ]]; then
-            echo "version=" >> "${GITHUB_OUTPUT}"
-            echo "version_major_prefixed=" >> "${GITHUB_OUTPUT}"
-            echo "version_major=" >> "${GITHUB_OUTPUT}"
-            echo "version_minor_prefixed=" >> "${GITHUB_OUTPUT}"
-            echo "version_minor=" >> "${GITHUB_OUTPUT}"
-            echo "version_plain=" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          version="$(
-            awk -F= -v key="${version_arg_name}" '$1 == "ARG " key { print $2; exit }' "${dockerfile_path}"
-          )"
-          version_plain="${version#v}"
-          version_major_prefixed="v$(printf '%s\n' "${version_plain}" | cut -d. -f1)"
-          version_major="$(printf '%s\n' "${version_plain}" | cut -d. -f1)"
-          version_minor_prefixed="v$(printf '%s\n' "${version_plain}" | cut -d. -f1,2)"
-          version_minor="$(printf '%s\n' "${version_plain}" | cut -d. -f1,2)"
-
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "version_major_prefixed=${version_major_prefixed}" >> "${GITHUB_OUTPUT}"
-          echo "version_major=${version_major}" >> "${GITHUB_OUTPUT}"
-          echo "version_minor_prefixed=${version_minor_prefixed}" >> "${GITHUB_OUTPUT}"
-          echo "version_minor=${version_minor}" >> "${GITHUB_OUTPUT}"
-          echo "version_plain=${version_plain}" >> "${GITHUB_OUTPUT}"
-
-      - name: Generate Docker metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}
-          tags: |
-            type=raw,value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
-            type=raw,value=${{ steps.version.outputs.version_minor_prefixed }},enable=${{ steps.version.outputs.version_minor_prefixed != '' && steps.version.outputs.version_minor_prefixed != steps.version.outputs.version }}
-            type=raw,value=${{ steps.version.outputs.version_major_prefixed }},enable=${{ steps.version.outputs.version_major_prefixed != '' && steps.version.outputs.version_major_prefixed != steps.version.outputs.version }}
-            type=raw,value=${{ steps.version.outputs.version_plain }},enable=${{ steps.version.outputs.version_plain != '' && steps.version.outputs.version_plain != steps.version.outputs.version }}
-            type=raw,value=${{ steps.version.outputs.version_minor }},enable=${{ steps.version.outputs.version_minor != '' }}
-            type=raw,value=${{ steps.version.outputs.version_major }},enable=${{ steps.version.outputs.version_major != '' }}
-            type=ref,event=tag
-            type=sha
-            type=raw,value=latest,enable=false
-
-      - name: Build and push ${{ matrix.name }}
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.context }}/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+            if (existing) {
+              await github.rest.repos.updateRelease({
+                owner,
+                repo,
+                release_id: existing.id,
+                tag_name: tag,
+                name,
+                body,
+                draft: false,
+                prerelease: false,
+              });
+            } else {
+              await github.rest.repos.createRelease({
+                owner,
+                repo,
+                tag_name: tag,
+                target_commitish: target,
+                name,
+                body,
+                draft: false,
+                prerelease: false,
+              });
+            }
