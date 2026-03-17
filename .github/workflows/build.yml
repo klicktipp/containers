@@ -157,3 +157,36 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
+
+  build-validation:
+    runs-on: ubuntu-latest
+    needs:
+      - detect-images
+      - build
+    if: ${{ always() }}
+    steps:
+      - name: Validate build result
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          detect_result="${{ needs.detect-images.result }}"
+          build_result="${{ needs.build.result }}"
+          matrix_json='${{ needs.detect-images.outputs.matrix }}'
+
+          if [[ "${detect_result}" != "success" ]]; then
+            echo "Image detection failed."
+            exit 1
+          fi
+
+          if [[ "${matrix_json}" == '{"include":[]}' ]]; then
+            echo "No image changes detected."
+            exit 0
+          fi
+
+          if [[ "${build_result}" != "success" ]]; then
+            echo "One or more image builds failed."
+            exit 1
+          fi
+
+          echo "All requested image builds completed successfully."

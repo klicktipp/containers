@@ -31,6 +31,7 @@ docker build -t local/kubectl:latest images/kubectl
 ## Publishing
 
 On pull requests, the build workflow validates only the changed images without publishing them.
+The stable status check for branch protection is `build-validation`.
 
 On `main` and manual runs, the push workflow publishes only changed images.
 
