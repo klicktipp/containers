@@ -1,7 +1,7 @@
 FROM debian:13.4-slim AS fetcher
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-ARG KUBECTL_VERSION=v1.30.3
+ARG KUBECTL_VERSION=v1.31.0
 ARG TARGETARCH
 
 RUN apt-get update \
