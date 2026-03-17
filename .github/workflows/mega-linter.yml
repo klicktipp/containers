@@ -1,0 +1,77 @@
+name: MegaLinter
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: megalinter-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  megalinter:
+    name: Lint changed files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run MegaLinter (diff only)
+        id: megalinter
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ML_VERSION: v9.4.0
+          ML_IMAGE: megalinter-ci_light
+          DEFAULT_WORKSPACE: ${{ github.workspace }}
+          MEGALINTER_CONFIG: .mega-linter.yml
+          REPORT_OUTPUT_FOLDER: megalinter-reports
+          VALIDATE_ALL_CODEBASE: "false"
+          DISABLE: REPOSITORY
+          GITHUB_COMMENT_REPORTER: "true"
+        run: |
+          set -o pipefail
+
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -w "${GITHUB_WORKSPACE}" \
+            -e DEFAULT_WORKSPACE \
+            -e GITHUB_ACTIONS=true \
+            -e GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME}" \
+            -e GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+            -e GITHUB_SHA="${GITHUB_SHA}" \
+            -e GITHUB_REF="${GITHUB_REF}" \
+            -e GITHUB_BASE_REF="${GITHUB_BASE_REF}" \
+            -e GITHUB_HEAD_REF="${GITHUB_HEAD_REF}" \
+            -e GITHUB_TOKEN \
+            -e MEGALINTER_CONFIG \
+            -e REPORT_OUTPUT_FOLDER \
+            -e VALIDATE_ALL_CODEBASE \
+            -e DISABLE \
+            -e GITHUB_COMMENT_REPORTER \
+            "oxsecurity/${ML_IMAGE}:${ML_VERSION}" \
+            /entrypoint.sh true
+
+      - name: Upload MegaLinter reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: megalinter-reports
+          path: ${{ github.workspace }}/megalinter-reports
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Fail workflow on lint findings
+        if: steps.megalinter.outcome != 'success'
+        shell: bash
+        run: |
+          echo "MegaLinter found issues. See the workflow logs and PR annotations for details."
+          exit 1
