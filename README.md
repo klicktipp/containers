@@ -5,7 +5,8 @@ This repository contains Docker image definitions intended for public distributi
 ## Structure
 
 - `images/<name>/Dockerfile`: one image per subdirectory
-- `.github/workflows/build.yml`: GitHub Actions workflow for building selected images
+- `.github/workflows/build.yml`: pull request and main branch build workflow
+- `.github/workflows/release.yml`: release workflow for full image publishing and release notes
 
 ## Version tags
 
@@ -27,8 +28,6 @@ docker build -t local/kubectl:latest images/kubectl
 
 ## Publishing
 
-On `main`, the GitHub Actions workflow builds and publishes only changed images.
+On `main`, the build workflow publishes only changed images.
 
-When a GitHub release is published, the workflow builds all images and also applies the release tag in addition to the image version tags.
-
-Release notes are updated with an image-specific section that only includes commits touching each `images/<name>/` directory since the previous release.
+On published GitHub releases, the release workflow builds all images, applies the release tag in addition to the image version tags, and updates the release notes with image-specific changes since the previous release.
