@@ -10,6 +10,9 @@ RUN curl --fail --silent --show-error --location --output /tmp/kubectl "https://
 
 FROM scratch
 
+LABEL org.opencontainers.image.authors="KlickTipp" \
+      org.opencontainers.image.vendor="KlickTipp"
+
 COPY --from=fetcher /tmp/kubectl /usr/local/bin/kubectl
 COPY --from=fetcher /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
