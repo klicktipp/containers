@@ -61,6 +61,101 @@ jobs:
 
           echo "matrix=${matrix_json}" >> "${GITHUB_OUTPUT}"
 
+  release-notes:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'release' }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate image-specific release notes
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_tag="${{ github.event.release.tag_name }}"
+          previous_tag="$(
+            git tag --sort=-creatordate \
+              | grep -Fxv "${current_tag}" \
+              | head -n1 || true
+          )"
+          notes_file="$(mktemp)"
+
+          {
+            echo "<!-- image-release-notes:start -->"
+            echo "## Image Changes"
+            echo
+
+            found_changes=false
+
+            for image_dir in images/*; do
+              [[ -d "${image_dir}" ]] || continue
+
+              image_name="$(basename "${image_dir}")"
+
+              if [[ -n "${previous_tag}" ]]; then
+                commits="$(
+                  git log --reverse --format='- %s (%h)' "${previous_tag}..${current_tag}" -- "${image_dir}" || true
+                )"
+              else
+                commits="$(
+                  git log --reverse --format='- %s (%h)' "${current_tag}" -- "${image_dir}" || true
+                )"
+              fi
+
+              if [[ -z "${commits}" ]]; then
+                continue
+              fi
+
+              found_changes=true
+              echo "### ${image_name}"
+              echo
+              printf '%s\n' "${commits}"
+              echo
+            done
+
+            if [[ "${found_changes}" == false ]]; then
+              echo "No image-specific changes found for this release."
+              echo
+            fi
+
+            echo "<!-- image-release-notes:end -->"
+          } > "${notes_file}"
+
+          {
+            echo "body_path=${notes_file}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Update GitHub release body
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const markerStart = '<!-- image-release-notes:start -->';
+            const markerEnd = '<!-- image-release-notes:end -->';
+            const generatedBlock = fs.readFileSync('${{ steps.notes.outputs.body_path }}', 'utf8').trim();
+            const release = context.payload.release;
+            const currentBody = release.body || '';
+
+            const blockRegex = new RegExp(`${markerStart}[\\s\\S]*?${markerEnd}`, 'm');
+            const nextBody = blockRegex.test(currentBody)
+              ? currentBody.replace(blockRegex, generatedBlock)
+              : (currentBody ? `${currentBody}\n\n${generatedBlock}` : generatedBlock);
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              body: nextBody,
+            });
+
   build:
     runs-on: ubuntu-latest
     needs: detect-images

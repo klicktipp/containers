@@ -30,3 +30,5 @@ docker build -t local/kubectl:latest images/kubectl
 On `main`, the GitHub Actions workflow builds and publishes only changed images.
 
 When a GitHub release is published, the workflow builds all images and also applies the release tag in addition to the image version tags.
+
+Release notes are updated with an image-specific section that only includes commits touching each `images/<name>/` directory since the previous release.
