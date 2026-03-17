@@ -9,6 +9,17 @@
     ":pinDevDependencies",
     "helpers:pinGitHubActionDigests"
   ],
+  "packageRules": [
+    {
+      "matchPackageNames": [
+        "kubernetes/kubernetes"
+      ],
+      "matchFileNames": [
+        "images/kubectl/Dockerfile"
+      ],
+      "automerge": true
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",
