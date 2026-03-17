@@ -1,5 +1,6 @@
 FROM curlimages/curl:8.18.0 AS fetcher
 
+# image-description: Kubernetes command-line tool (kubectl)
 # image-version: KUBECTL_VERSION
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 ARG KUBECTL_VERSION=v1.31.0
@@ -11,6 +12,7 @@ RUN curl --fail --silent --show-error --location --output /tmp/kubectl "https://
 FROM scratch
 
 LABEL org.opencontainers.image.authors="KlickTipp" \
+      org.opencontainers.image.description="Kubernetes command-line tool (kubectl)" \
       org.opencontainers.image.vendor="KlickTipp"
 
 COPY --from=fetcher /tmp/kubectl /usr/local/bin/kubectl

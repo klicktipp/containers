@@ -11,9 +11,10 @@ This repository contains Docker image definitions intended for public distributi
 
 ## Version tags
 
-Version tags are derived from the image Dockerfile.
+Version tags and image descriptions are derived from the image Dockerfile.
 
 - Add `# image-version: <ARG_NAME>` above the primary version argument when the image should publish version tags
+- Add `# image-description: <TEXT>` when the image should publish a human-readable OCI description
 - Define that argument as `ARG <ARG_NAME>=...`
 - The workflow publishes `latest`, `sha-...`, the full version, and a major-minor tag when a primary version is available
 
