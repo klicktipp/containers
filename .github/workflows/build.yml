@@ -89,12 +89,61 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Extract image version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dockerfile_path="${{ matrix.context }}/Dockerfile"
+          version_arg_name="$(
+            awk -F': ' '/^# image-version: / { print $2; exit }' "${dockerfile_path}"
+          )"
+
+          if [[ -z "${version_arg_name}" ]]; then
+            version_arg_name="$(
+              awk -F'[ =]' '/^ARG [A-Z0-9_]+_VERSION=/{print $2; exit}' "${dockerfile_path}"
+            )"
+          fi
+
+          if [[ -z "${version_arg_name}" ]]; then
+            echo "version=" >> "${GITHUB_OUTPUT}"
+            echo "version_major_prefixed=" >> "${GITHUB_OUTPUT}"
+            echo "version_major=" >> "${GITHUB_OUTPUT}"
+            echo "version_minor_prefixed=" >> "${GITHUB_OUTPUT}"
+            echo "version_minor=" >> "${GITHUB_OUTPUT}"
+            echo "version_plain=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          version="$(
+            awk -F= -v key="${version_arg_name}" '$1 == "ARG " key { print $2; exit }' "${dockerfile_path}"
+          )"
+          version_plain="${version#v}"
+          version_major_prefixed="v$(printf '%s\n' "${version_plain}" | cut -d. -f1)"
+          version_major="$(printf '%s\n' "${version_plain}" | cut -d. -f1)"
+          version_minor_prefixed="v$(printf '%s\n' "${version_plain}" | cut -d. -f1,2)"
+          version_minor="$(printf '%s\n' "${version_plain}" | cut -d. -f1,2)"
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "version_major_prefixed=${version_major_prefixed}" >> "${GITHUB_OUTPUT}"
+          echo "version_major=${version_major}" >> "${GITHUB_OUTPUT}"
+          echo "version_minor_prefixed=${version_minor_prefixed}" >> "${GITHUB_OUTPUT}"
+          echo "version_minor=${version_minor}" >> "${GITHUB_OUTPUT}"
+          echo "version_plain=${version_plain}" >> "${GITHUB_OUTPUT}"
+
       - name: Generate Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}
           tags: |
+            type=raw,value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
+            type=raw,value=${{ steps.version.outputs.version_minor_prefixed }},enable=${{ steps.version.outputs.version_minor_prefixed != '' && steps.version.outputs.version_minor_prefixed != steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.version_major_prefixed }},enable=${{ steps.version.outputs.version_major_prefixed != '' && steps.version.outputs.version_major_prefixed != steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.version_plain }},enable=${{ steps.version.outputs.version_plain != '' && steps.version.outputs.version_plain != steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.version_minor }},enable=${{ steps.version.outputs.version_minor != '' }}
+            type=raw,value=${{ steps.version.outputs.version_major }},enable=${{ steps.version.outputs.version_major != '' }}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
