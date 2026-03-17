@@ -53,7 +53,7 @@ jobs:
           matrix_json="$(
             printf '%s\n' "${image_dirs[@]}" \
               | jq -R '{name: ., context: ("./images/" + .)}' \
-              | jq -s '{include: .}'
+              | jq -cs '{include: .}'
           )"
 
           echo "matrix=${matrix_json}" >> "${GITHUB_OUTPUT}"
