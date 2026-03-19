@@ -2,7 +2,7 @@ FROM curlimages/curl:8.18.0 AS fetcher
 
 # image-version: KUBECTL_VERSION
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-ARG KUBECTL_VERSION=v1.35.2
+ARG KUBECTL_VERSION=v1.35.3
 ARG TARGETARCH
 ARG IMAGE_DESCRIPTION="Kubernetes command-line tool (kubectl)"
 ARG IMAGE_AUTHORS="KlickTipp"
