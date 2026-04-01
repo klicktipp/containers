@@ -6,6 +6,7 @@ DNS_PORT="${DNS_PORT:-53}"
 COMMENT_PREFIX="${COMMENT_PREFIX:-PowerDNS transparent DNS}"
 IPTABLES_WAIT_SECONDS="${IPTABLES_WAIT_SECONDS:-5}"
 TAKEOVER_CLUSTER_IP="${TAKEOVER_CLUSTER_IP:-false}"
+PRIMARY_SERVICE_IP="${PRIMARY_SERVICE_IP:-}"
 SETUP_IPTABLES="${SETUP_IPTABLES:-true}"
 CAPTURE_OUTPUT="${CAPTURE_OUTPUT:-true}"
 
@@ -134,66 +135,60 @@ remove_jump() {
 	done
 }
 
+install_ip_rules_and_jumps() {
+	target_ip="$1"
+	add_ip_rules "${target_ip}"
+	ensure_jump raw udp PREROUTING "${RAW_CHAIN}" destination "${target_ip}"
+	ensure_jump raw tcp PREROUTING "${RAW_CHAIN}" destination "${target_ip}"
+	if [ "${CAPTURE_OUTPUT}" = "true" ]; then
+		ensure_jump raw udp OUTPUT "${RAW_CHAIN}" destination "${target_ip}"
+		ensure_jump raw tcp OUTPUT "${RAW_CHAIN}" destination "${target_ip}"
+	fi
+	ensure_jump raw udp OUTPUT "${RAW_CHAIN}" source "${target_ip}"
+	ensure_jump raw tcp OUTPUT "${RAW_CHAIN}" source "${target_ip}"
+	ensure_jump filter udp INPUT "${FILTER_CHAIN}" destination "${target_ip}"
+	ensure_jump filter tcp INPUT "${FILTER_CHAIN}" destination "${target_ip}"
+	ensure_jump filter udp OUTPUT "${FILTER_CHAIN}" source "${target_ip}"
+	ensure_jump filter tcp OUTPUT "${FILTER_CHAIN}" source "${target_ip}"
+}
+
+remove_ip_rules_and_jumps() {
+	target_ip="$1"
+	remove_jump raw udp PREROUTING "${RAW_CHAIN}" destination "${target_ip}"
+	remove_jump raw tcp PREROUTING "${RAW_CHAIN}" destination "${target_ip}"
+	if [ "${CAPTURE_OUTPUT}" = "true" ]; then
+		remove_jump raw udp OUTPUT "${RAW_CHAIN}" destination "${target_ip}"
+		remove_jump raw tcp OUTPUT "${RAW_CHAIN}" destination "${target_ip}"
+	fi
+	remove_jump raw udp OUTPUT "${RAW_CHAIN}" source "${target_ip}"
+	remove_jump raw tcp OUTPUT "${RAW_CHAIN}" source "${target_ip}"
+	remove_jump filter udp INPUT "${FILTER_CHAIN}" destination "${target_ip}"
+	remove_jump filter tcp INPUT "${FILTER_CHAIN}" destination "${target_ip}"
+	remove_jump filter udp OUTPUT "${FILTER_CHAIN}" source "${target_ip}"
+	remove_jump filter tcp OUTPUT "${FILTER_CHAIN}" source "${target_ip}"
+}
+
 install_rules() {
 	service_ip_active="$1"
+	primary_service_ip_active="$2"
 	ensure_raw_chain
 	ensure_filter_chain
-	add_ip_rules "${LOCAL_IP}"
-	ensure_jump raw udp PREROUTING "${RAW_CHAIN}" destination "${LOCAL_IP}"
-	ensure_jump raw tcp PREROUTING "${RAW_CHAIN}" destination "${LOCAL_IP}"
-	if [ "${CAPTURE_OUTPUT}" = "true" ]; then
-		ensure_jump raw udp OUTPUT "${RAW_CHAIN}" destination "${LOCAL_IP}"
-		ensure_jump raw tcp OUTPUT "${RAW_CHAIN}" destination "${LOCAL_IP}"
-	fi
-	ensure_jump raw udp OUTPUT "${RAW_CHAIN}" source "${LOCAL_IP}"
-	ensure_jump raw tcp OUTPUT "${RAW_CHAIN}" source "${LOCAL_IP}"
-	ensure_jump filter udp INPUT "${FILTER_CHAIN}" destination "${LOCAL_IP}"
-	ensure_jump filter tcp INPUT "${FILTER_CHAIN}" destination "${LOCAL_IP}"
-	ensure_jump filter udp OUTPUT "${FILTER_CHAIN}" source "${LOCAL_IP}"
-	ensure_jump filter tcp OUTPUT "${FILTER_CHAIN}" source "${LOCAL_IP}"
+	install_ip_rules_and_jumps "${LOCAL_IP}"
 	if [ "${service_ip_active}" -eq 1 ]; then
-		add_ip_rules "${SERVICE_IP}"
-		ensure_jump raw udp PREROUTING "${RAW_CHAIN}" destination "${SERVICE_IP}"
-		ensure_jump raw tcp PREROUTING "${RAW_CHAIN}" destination "${SERVICE_IP}"
-		if [ "${CAPTURE_OUTPUT}" = "true" ]; then
-			ensure_jump raw udp OUTPUT "${RAW_CHAIN}" destination "${SERVICE_IP}"
-			ensure_jump raw tcp OUTPUT "${RAW_CHAIN}" destination "${SERVICE_IP}"
-		fi
-		ensure_jump raw udp OUTPUT "${RAW_CHAIN}" source "${SERVICE_IP}"
-		ensure_jump raw tcp OUTPUT "${RAW_CHAIN}" source "${SERVICE_IP}"
-		ensure_jump filter udp INPUT "${FILTER_CHAIN}" destination "${SERVICE_IP}"
-		ensure_jump filter tcp INPUT "${FILTER_CHAIN}" destination "${SERVICE_IP}"
-		ensure_jump filter udp OUTPUT "${FILTER_CHAIN}" source "${SERVICE_IP}"
-		ensure_jump filter tcp OUTPUT "${FILTER_CHAIN}" source "${SERVICE_IP}"
+		install_ip_rules_and_jumps "${SERVICE_IP}"
+	fi
+	if [ "${primary_service_ip_active}" -eq 1 ]; then
+		install_ip_rules_and_jumps "${PRIMARY_SERVICE_IP}"
 	fi
 }
 
 remove_rules() {
-	remove_jump raw udp PREROUTING "${RAW_CHAIN}" destination "${LOCAL_IP}"
-	remove_jump raw tcp PREROUTING "${RAW_CHAIN}" destination "${LOCAL_IP}"
-	if [ "${CAPTURE_OUTPUT}" = "true" ]; then
-		remove_jump raw udp OUTPUT "${RAW_CHAIN}" destination "${LOCAL_IP}"
-		remove_jump raw tcp OUTPUT "${RAW_CHAIN}" destination "${LOCAL_IP}"
-	fi
-	remove_jump raw udp OUTPUT "${RAW_CHAIN}" source "${LOCAL_IP}"
-	remove_jump raw tcp OUTPUT "${RAW_CHAIN}" source "${LOCAL_IP}"
-	remove_jump filter udp INPUT "${FILTER_CHAIN}" destination "${LOCAL_IP}"
-	remove_jump filter tcp INPUT "${FILTER_CHAIN}" destination "${LOCAL_IP}"
-	remove_jump filter udp OUTPUT "${FILTER_CHAIN}" source "${LOCAL_IP}"
-	remove_jump filter tcp OUTPUT "${FILTER_CHAIN}" source "${LOCAL_IP}"
+	remove_ip_rules_and_jumps "${LOCAL_IP}"
 	if [ "${TAKEOVER_CLUSTER_IP}" = "true" ] && [ -n "${SERVICE_IP:-}" ]; then
-		remove_jump raw udp PREROUTING "${RAW_CHAIN}" destination "${SERVICE_IP}"
-		remove_jump raw tcp PREROUTING "${RAW_CHAIN}" destination "${SERVICE_IP}"
-		if [ "${CAPTURE_OUTPUT}" = "true" ]; then
-			remove_jump raw udp OUTPUT "${RAW_CHAIN}" destination "${SERVICE_IP}"
-			remove_jump raw tcp OUTPUT "${RAW_CHAIN}" destination "${SERVICE_IP}"
-		fi
-		remove_jump raw udp OUTPUT "${RAW_CHAIN}" source "${SERVICE_IP}"
-		remove_jump raw tcp OUTPUT "${RAW_CHAIN}" source "${SERVICE_IP}"
-		remove_jump filter udp INPUT "${FILTER_CHAIN}" destination "${SERVICE_IP}"
-		remove_jump filter tcp INPUT "${FILTER_CHAIN}" destination "${SERVICE_IP}"
-		remove_jump filter udp OUTPUT "${FILTER_CHAIN}" source "${SERVICE_IP}"
-		remove_jump filter tcp OUTPUT "${FILTER_CHAIN}" source "${SERVICE_IP}"
+		remove_ip_rules_and_jumps "${SERVICE_IP}"
+	fi
+	if [ -n "${PRIMARY_SERVICE_IP}" ]; then
+		remove_ip_rules_and_jumps "${PRIMARY_SERVICE_IP}"
 	fi
 	ipt -t raw -F "${RAW_CHAIN}" 2>/dev/null || true
 	ipt -t raw -X "${RAW_CHAIN}" 2>/dev/null || true
@@ -205,5 +200,8 @@ remove_takeover_ips() {
 	remove_local_ip "${LOCAL_IP}"
 	if [ "${TAKEOVER_CLUSTER_IP}" = "true" ] && [ -n "${SERVICE_IP:-}" ]; then
 		remove_local_ip "${SERVICE_IP}"
+	fi
+	if [ -n "${PRIMARY_SERVICE_IP}" ]; then
+		remove_local_ip "${PRIMARY_SERVICE_IP}"
 	fi
 }
