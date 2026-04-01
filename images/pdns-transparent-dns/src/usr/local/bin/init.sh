@@ -15,3 +15,8 @@ if [ -n "${PRIMARY_SERVICE_IP:-}" ]; then
 	ensure_local_ip "${PRIMARY_SERVICE_IP}"
 	log "primary PowerDNS Service IP prepared on ${PRIMARY_SERVICE_IP}"
 fi
+
+if [ -n "${ADDITIONAL_SERVICE_IP:-}" ]; then
+	ensure_local_ip "${ADDITIONAL_SERVICE_IP}"
+	log "additional PowerDNS Service IP prepared on ${ADDITIONAL_SERVICE_IP}"
+fi

@@ -7,6 +7,7 @@ COMMENT_PREFIX="${COMMENT_PREFIX:-PowerDNS transparent DNS}"
 IPTABLES_WAIT_SECONDS="${IPTABLES_WAIT_SECONDS:-5}"
 TAKEOVER_CLUSTER_IP="${TAKEOVER_CLUSTER_IP:-false}"
 PRIMARY_SERVICE_IP="${PRIMARY_SERVICE_IP:-}"
+ADDITIONAL_SERVICE_IP="${ADDITIONAL_SERVICE_IP:-}"
 SETUP_IPTABLES="${SETUP_IPTABLES:-true}"
 CAPTURE_OUTPUT="${CAPTURE_OUTPUT:-true}"
 
@@ -171,6 +172,7 @@ remove_ip_rules_and_jumps() {
 install_rules() {
 	service_ip_active="$1"
 	primary_service_ip_active="$2"
+	additional_service_ip_active="$3"
 	ensure_raw_chain
 	ensure_filter_chain
 	install_ip_rules_and_jumps "${LOCAL_IP}"
@@ -179,6 +181,9 @@ install_rules() {
 	fi
 	if [ "${primary_service_ip_active}" -eq 1 ]; then
 		install_ip_rules_and_jumps "${PRIMARY_SERVICE_IP}"
+	fi
+	if [ "${additional_service_ip_active}" -eq 1 ]; then
+		install_ip_rules_and_jumps "${ADDITIONAL_SERVICE_IP}"
 	fi
 }
 
@@ -189,6 +194,9 @@ remove_rules() {
 	fi
 	if [ -n "${PRIMARY_SERVICE_IP}" ]; then
 		remove_ip_rules_and_jumps "${PRIMARY_SERVICE_IP}"
+	fi
+	if [ -n "${ADDITIONAL_SERVICE_IP}" ]; then
+		remove_ip_rules_and_jumps "${ADDITIONAL_SERVICE_IP}"
 	fi
 	ipt -t raw -F "${RAW_CHAIN}" 2>/dev/null || true
 	ipt -t raw -X "${RAW_CHAIN}" 2>/dev/null || true
@@ -203,5 +211,8 @@ remove_takeover_ips() {
 	fi
 	if [ -n "${PRIMARY_SERVICE_IP}" ]; then
 		remove_local_ip "${PRIMARY_SERVICE_IP}"
+	fi
+	if [ -n "${ADDITIONAL_SERVICE_IP}" ]; then
+		remove_local_ip "${ADDITIONAL_SERVICE_IP}"
 	fi
 }
