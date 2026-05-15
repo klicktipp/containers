@@ -1,4 +1,4 @@
-FROM curlimages/curl:8.18.0 AS fetcher
+FROM curlimages/curl:8.20.0 AS fetcher
 
 # image-version: KUBECTL_VERSION
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
