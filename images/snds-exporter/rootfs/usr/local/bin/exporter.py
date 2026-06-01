@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl, urlsplit
 import requests
 from flask import Flask, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
+from waitress import serve
 
 # Configure logging once per process
 logging.basicConfig(level=logging.INFO)
@@ -84,6 +85,8 @@ DEBUG_UNKNOWN_RESPONSES = os.getenv("DEBUG_UNKNOWN_RESPONSES", "false").lower() 
     "true",
     "yes",
 }
+LISTEN_HOST = os.getenv("LISTEN_HOST", "0.0.0.0")
+LISTEN_PORT = int(os.getenv("LISTEN_PORT", "9100"))
 
 status_numeric_mapping = {"green": 1, "yellow": 2, "red": 3}
 FIELD_ALIASES = {
@@ -668,4 +671,4 @@ def metrics():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=9100)
+    serve(app, host=LISTEN_HOST, port=LISTEN_PORT)

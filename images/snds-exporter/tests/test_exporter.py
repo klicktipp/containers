@@ -70,9 +70,13 @@ def load_exporter_module():
     fake_prom.Gauge = FakeGauge
     fake_prom.generate_latest = lambda: b""
 
+    fake_waitress = types.ModuleType("waitress")
+    fake_waitress.serve = lambda *args, **kwargs: None
+
     sys.modules["requests"] = fake_requests
     sys.modules["flask"] = fake_flask
     sys.modules["prometheus_client"] = fake_prom
+    sys.modules["waitress"] = fake_waitress
 
     module_path = (
         Path(__file__).resolve().parents[1] / "rootfs/usr/local/bin/exporter.py"
