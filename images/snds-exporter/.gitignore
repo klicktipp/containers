@@ -1,0 +1,13 @@
+# Local environment overrides and secrets
+.env
+.local.env
+.override.env
+**/.envrc
+
+# Python runtime artifacts from the exporter
+__pycache__/
+*.py[cod]
+
+# Local tooling output used in this repository
+.ruff_cache/
+megalinter-reports/
