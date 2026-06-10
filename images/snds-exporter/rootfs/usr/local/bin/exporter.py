@@ -4,14 +4,15 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import threading
 import time
 from io import StringIO
 from typing import Optional
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import quote
 
 import requests
-from flask import Flask, Response
+from flask import Flask, Response, request
 from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
 from waitress import serve
 
@@ -39,13 +40,18 @@ trap_message_period_timestamp_gauge = Gauge(
 )
 trap_hits_gauge = Gauge("snds_trap_hits", "Trap hits from SNDS", ["ip"])
 complaint_rate_gauge = Gauge("snds_complaint_rate", "Complaint rate from SNDS", ["ip"])
-overall_status_gauge = Gauge(
-    "snds_overall_status",
-    "Deprecated numeric overall status per IP",
-    ["ip", "status"],
-)
 overall_status_info_gauge = Gauge(
     "snds_overall_status_info", "One-hot overall status per IP", ["ip", "status"]
+)
+ip_status_blocked_gauge = Gauge(
+    "snds_ip_status_blocked",
+    "1 if the IP range from /api/report/status/ip is blocked, else 0",
+    ["range_start", "range_end"],
+)
+ip_status_reason_info_gauge = Gauge(
+    "snds_ip_status_reason_info",
+    "One-hot IP status reason per IP range from /api/report/status/ip",
+    ["range_start", "range_end", "blocked", "reason"],
 )
 jmrp1_sender_present_gauge = Gauge(
     "snds_jmrp1_sender_present",
@@ -71,11 +77,19 @@ fetch_parse_error_gauge = Gauge(
 )
 
 # Configuration sourced from environment
-API_URL = os.getenv(
-    "API_URL", "https://sendersupport.olc.protection.outlook.com/snds/data.aspx"
+REST_API_URL = os.getenv(
+    "REST_API_URL",
+    "https://substrate.office.com/ip-domain-management-snds/api/report/data",
 )
-API_KEY = os.getenv("API_KEY", "")
-AUTOMATED_DATA_ACCESS_URL = os.getenv("AUTOMATED_DATA_ACCESS_URL", "")
+STATUS_API_URL = os.getenv(
+    "STATUS_API_URL",
+    "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip",
+)
+REST_API_DATE = os.getenv("REST_API_DATE", "").strip()
+REST_API_IP = os.getenv("REST_API_IP", "").strip()
+REST_API_LOOKBACK_DAYS = max(1, int(os.getenv("REST_API_LOOKBACK_DAYS", "3")))
+SNDS_ACCESS_TOKEN = os.getenv("SNDS_ACCESS_TOKEN", "")
+SNDS_ACCESS_TOKEN_FILE = os.getenv("SNDS_ACCESS_TOKEN_FILE", "")
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "10"))
 CACHE_SECONDS = int(os.getenv("CACHE_SECONDS", "300"))
 VERIFY_TLS = os.getenv("VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
@@ -116,7 +130,18 @@ _last_fetch_epoch = 0.0
 _last_fetch_success = False
 
 
+def _default_token_file_path() -> str:
+    xdg_state_home = os.getenv("XDG_STATE_HOME")
+    if xdg_state_home:
+        return os.path.join(xdg_state_home, "snds-exporter", "access-token")
+    return os.path.join(
+        os.path.expanduser("~"), ".local", "state", "snds-exporter", "access-token"
+    )
+
+
 def _normalize_column_name(value: str) -> str:
+    value = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", value)
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
     return " ".join(
         value.lstrip("\ufeff")
         .strip()
@@ -192,16 +217,128 @@ def _parse_complaint_rate(value: str) -> Optional[float]:
         return None
 
 
-def _extract_data_url_and_params() -> tuple[str, dict[str, str]]:
-    data_url = AUTOMATED_DATA_ACCESS_URL or API_URL
-    if not data_url:
-        raise ValueError("Neither AUTOMATED_DATA_ACCESS_URL nor API_URL is set.")
+def _load_access_token() -> str:
+    token_file_path = SNDS_ACCESS_TOKEN_FILE or _default_token_file_path()
+    if token_file_path and os.path.exists(token_file_path):
+        with open(token_file_path, encoding="utf-8") as token_file:
+            return token_file.read().strip()
+    return SNDS_ACCESS_TOKEN.strip()
 
-    params = dict(parse_qsl(urlsplit(data_url).query, keep_blank_values=True))
-    if API_KEY and "key" not in params:
-        params["key"] = API_KEY
 
-    return data_url, params
+def _default_rest_api_date() -> str:
+    return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).strftime(
+        "%Y-%m-%d"
+    )
+
+
+def _default_rest_api_dates() -> list[str]:
+    start = dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=1)
+    return [
+        (start - dt.timedelta(days=offset)).strftime("%Y-%m-%d")
+        for offset in range(REST_API_LOOKBACK_DAYS)
+    ]
+
+
+def _build_request(
+    rest_api_date: Optional[str] = None,
+    rest_api_ip: Optional[str] = None,
+) -> tuple[str, dict[str, str], dict[str, str]]:
+    access_token = _load_access_token()
+    if not access_token:
+        raise ValueError(
+            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
+        )
+
+    selected_date = (REST_API_DATE if rest_api_date is None else rest_api_date).strip()
+    selected_ip = (REST_API_IP if rest_api_ip is None else rest_api_ip).strip()
+    if not selected_date:
+        selected_date = _default_rest_api_date()
+    rest_api_url = REST_API_URL.rstrip("/")
+    if selected_date:
+        rest_api_url = f"{rest_api_url}/{quote(selected_date, safe='')}"
+    if selected_ip:
+        rest_api_url = f"{rest_api_url}/{quote(selected_ip, safe='')}"
+    return (
+        rest_api_url,
+        {},
+        {"Authorization": f"Bearer {access_token}"},
+    )
+
+
+def _build_rest_request_candidates(
+    rest_api_date: Optional[str] = None,
+    rest_api_ip: Optional[str] = None,
+) -> list[tuple[str, dict[str, str], dict[str, str]]]:
+    access_token = _load_access_token()
+    if not access_token:
+        raise ValueError(
+            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
+        )
+
+    selected_date = (REST_API_DATE if rest_api_date is None else rest_api_date).strip()
+    selected_ip = (REST_API_IP if rest_api_ip is None else rest_api_ip).strip()
+    dates = [selected_date] if selected_date else _default_rest_api_dates()
+    candidates = []
+    for candidate_date in dates:
+        rest_api_url = REST_API_URL.rstrip("/")
+        if candidate_date:
+            rest_api_url = f"{rest_api_url}/{quote(candidate_date, safe='')}"
+        if selected_ip:
+            rest_api_url = f"{rest_api_url}/{quote(selected_ip, safe='')}"
+        candidates.append(
+            (rest_api_url, {}, {"Authorization": f"Bearer {access_token}"})
+        )
+    return candidates
+
+
+def _build_status_request() -> tuple[str, dict[str, str], dict[str, str]]:
+    access_token = _load_access_token()
+    if not access_token:
+        raise ValueError("SNDS IP status report requires an access token.")
+    return STATUS_API_URL.rstrip("/"), {}, {"Authorization": f"Bearer {access_token}"}
+
+
+def _is_rest_api_request(url: str, headers: dict[str, str]) -> bool:
+    return bool(headers.get("Authorization")) and "/api/report/" in url
+
+
+def _request_with_rest_fallback(
+    data_url: str,
+    request_params: dict[str, str],
+    request_headers: dict[str, str],
+) -> requests.Response:
+    response = _session.get(
+        data_url,
+        params=request_params,
+        headers=request_headers,
+        timeout=REQUEST_TIMEOUT,
+        verify=VERIFY_TLS,
+    )
+    if (
+        response.status_code == 404
+        and _is_rest_api_request(data_url, request_headers)
+        and not data_url.endswith("/")
+    ):
+        retry_url = f"{data_url}/"
+        retry_response = _session.get(
+            retry_url,
+            params=request_params,
+            headers=request_headers,
+            timeout=REQUEST_TIMEOUT,
+            verify=VERIFY_TLS,
+        )
+        if retry_response.ok:
+            logger.info("SNDS REST API succeeded after retrying with trailing slash.")
+            return retry_response
+        response = retry_response
+    return response
+
+
+def _http_error_details(response: requests.Response) -> str:
+    body = " ".join(response.text.split())
+    if body:
+        return f"HTTP {response.status_code} response body: {body[:300]}"
+    return f"HTTP {response.status_code} response body was empty."
 
 
 def _validate_response(response: requests.Response) -> None:
@@ -273,6 +410,62 @@ def _resolve_column_indexes(header: list[str]) -> dict[str, int]:
         )
 
     return indexes
+
+
+def _resolve_status_column_indexes(header: list[str]) -> dict[str, int]:
+    indexes: dict[str, int] = {}
+    normalized = [_normalize_column_name(column) for column in header]
+
+    status_aliases = {
+        "range_start": {
+            "beginning ip address",
+            "starting ip address",
+            "start ip",
+            "ip address",
+            "ip",
+        },
+        "range_end": {"ending ip address", "ending ip", "end ip"},
+        "blocked": {"blocked", "is blocked", "listed", "is listed"},
+        "reason": {"reason", "description", "details", "comment", "comments"},
+    }
+
+    for logical_name in ("range_start", "range_end", "blocked"):
+        aliases = status_aliases[logical_name]
+        for index, column_name in enumerate(normalized):
+            if column_name in aliases:
+                indexes[logical_name] = index
+                break
+
+    for index, column_name in enumerate(normalized):
+        if "reason" in indexes:
+            break
+        if column_name in status_aliases["reason"]:
+            indexes["reason"] = index
+
+    missing = {"range_start", "range_end", "blocked"} - set(indexes)
+    if missing:
+        raise ValueError(
+            "SNDS status format is unsupported. Missing columns: "
+            + ", ".join(sorted(missing))
+        )
+
+    return indexes
+
+
+def _parse_bool(value: str) -> Optional[bool]:
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    return None
+
+
+def _infer_status_from_blocked_flag(value: str) -> Optional[str]:
+    blocked = _parse_bool(value)
+    if blocked is None:
+        return None
+    return "red" if blocked else "green"
 
 
 def _find_header_row(
@@ -411,9 +604,6 @@ def _update_row_metrics(
 
     status_lower = overall_status.strip().lower()
     if status_lower in status_numeric_mapping:
-        overall_status_gauge.labels(ip=ip, status=status_lower).set(
-            status_numeric_mapping[status_lower]
-        )
         overall_status_info_gauge.labels(ip=ip, status=status_lower).set(1)
     elif overall_status.strip():
         logger.warning("Unknown overall status for IP %s: %s", ip, overall_status)
@@ -569,6 +759,176 @@ def _update_gauges_from_csv(csv_content: str) -> int:
     return processed_rows
 
 
+def _update_ip_status_metrics(
+    range_start: str,
+    range_end: str,
+    blocked_value: str,
+    reason: str,
+) -> None:
+    blocked = _parse_bool(blocked_value)
+    if blocked is None:
+        logger.warning(
+            "Unknown blocked flag for IP range %s-%s: %s",
+            range_start,
+            range_end,
+            blocked_value,
+        )
+        return
+
+    blocked_label = "true" if blocked else "false"
+    ip_status_blocked_gauge.labels(
+        range_start=range_start,
+        range_end=range_end,
+    ).set(1 if blocked else 0)
+    if reason.strip():
+        ip_status_reason_info_gauge.labels(
+            range_start=range_start,
+            range_end=range_end,
+            blocked=blocked_label,
+            reason=reason.strip(),
+        ).set(1)
+
+
+def _update_ip_status_gauges_from_json(json_content: str) -> int:
+    payload = json.loads(json_content)
+    if isinstance(payload, dict):
+        for key in ("value", "items", "data", "results"):
+            if isinstance(payload.get(key), list):
+                payload = payload[key]
+                break
+
+    if not isinstance(payload, list):
+        raise ValueError(
+            "SNDS status JSON response does not contain a list of records."
+        )
+
+    processed_rows = 0
+    last_sample_keys: list[str] = []
+
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        normalized = {
+            _normalize_column_name(key): str(value) for key, value in item.items()
+        }
+        last_sample_keys = list(normalized.keys())
+        try:
+            indexes = _resolve_status_column_indexes(list(normalized.keys()))
+        except ValueError:
+            continue
+
+        values = list(normalized.values())
+        range_start = values[indexes["range_start"]].strip()
+        range_end = values[indexes["range_end"]].strip()
+        if not _is_ip_address(range_start) or not _is_ip_address(range_end):
+            continue
+
+        _update_ip_status_metrics(
+            range_start,
+            range_end,
+            values[indexes["blocked"]],
+            values[indexes["reason"]] if "reason" in indexes else "",
+        )
+        processed_rows += 1
+
+    if processed_rows == 0:
+        raise ValueError(
+            "SNDS status JSON format is unsupported. Sample keys: "
+            + ", ".join(last_sample_keys[:10])
+        )
+
+    return processed_rows
+
+
+def _update_ip_status_gauges_from_csv(csv_content: str) -> int:
+    rows = [
+        row for row in _csv_reader(csv_content) if any(cell.strip() for cell in row)
+    ]
+    if not rows:
+        raise ValueError("SNDS status response did not contain any CSV rows.")
+
+    header_index = None
+    column_indexes = None
+    for index, row in enumerate(rows[:10]):
+        try:
+            header_index = index
+            column_indexes = _resolve_status_column_indexes(row)
+            break
+        except ValueError:
+            continue
+
+    if column_indexes is not None and header_index is not None:
+        data_rows = rows[header_index + 1 :]
+    else:
+        first_row = rows[0]
+        if (
+            len(first_row) >= 4
+            and _is_ip_address(first_row[0].strip())
+            and _is_ip_address(first_row[1].strip())
+            and _parse_bool(first_row[2]) is not None
+        ):
+            data_rows = rows
+            processed_rows = 0
+            for row in data_rows:
+                if len(row) < 4:
+                    continue
+                range_start = row[0].strip()
+                range_end = row[1].strip()
+                if not _is_ip_address(range_start) or not _is_ip_address(range_end):
+                    continue
+                if _parse_bool(row[2]) is None:
+                    continue
+                _update_ip_status_metrics(
+                    range_start,
+                    range_end,
+                    row[2].strip(),
+                    row[3].strip(),
+                )
+                processed_rows += 1
+
+            if processed_rows == 0:
+                raise ValueError(
+                    "SNDS status CSV did not contain any usable data rows."
+                )
+            return processed_rows
+
+        sample_row = " | ".join(cell.strip() for cell in rows[0][:12])
+        raise ValueError(
+            f"SNDS status CSV format is unsupported. First row: {sample_row}"
+        )
+
+    processed_rows = 0
+    for row in data_rows:
+        if len(row) <= max(column_indexes.values()):
+            continue
+        range_start = row[column_indexes["range_start"]].strip()
+        range_end = row[column_indexes["range_end"]].strip()
+        if not _is_ip_address(range_start) or not _is_ip_address(range_end):
+            continue
+        _update_ip_status_metrics(
+            range_start,
+            range_end,
+            row[column_indexes["blocked"]].strip(),
+            row[column_indexes["reason"]].strip() if "reason" in column_indexes else "",
+        )
+        processed_rows += 1
+
+    if processed_rows == 0:
+        raise ValueError("SNDS status CSV did not contain any usable data rows.")
+
+    return processed_rows
+
+
+def _update_ip_status_gauges(content: str) -> int:
+    ip_status_blocked_gauge.clear()
+    ip_status_reason_info_gauge.clear()
+
+    stripped = content.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        return _update_ip_status_gauges_from_json(content)
+    return _update_ip_status_gauges_from_csv(content)
+
+
 def _update_gauges(csv_content: str) -> int:
     activity_period_timestamp_gauge.clear()
     rcpt_commands_gauge.clear()
@@ -577,7 +937,6 @@ def _update_gauges(csv_content: str) -> int:
     trap_message_period_timestamp_gauge.clear()
     trap_hits_gauge.clear()
     complaint_rate_gauge.clear()
-    overall_status_gauge.clear()
     overall_status_info_gauge.clear()
     jmrp1_sender_present_gauge.clear()
     comments_present_gauge.clear()
@@ -588,26 +947,37 @@ def _update_gauges(csv_content: str) -> int:
     return _update_gauges_from_csv(csv_content)
 
 
-def fetch_snds_data(force: bool = False) -> None:
+def fetch_snds_data(
+    force: bool = False,
+    rest_api_date: Optional[str] = None,
+    rest_api_ip: Optional[str] = None,
+) -> None:
     """Fetch SNDS data and update metrics if the cache is stale."""
     global _last_fetch_epoch, _last_fetch_success
+    manual_rest_override = rest_api_date is not None or rest_api_ip is not None
 
-    if not API_KEY and not AUTOMATED_DATA_ACCESS_URL and "key=" not in API_URL:
+    if not _load_access_token():
         logger.error(
-            "No SNDS automated data access link is configured. Set AUTOMATED_DATA_ACCESS_URL or API_KEY."
+            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
         )
         fetch_success_gauge.set(0)
         return
 
     now = time.time()
     # Fast path without lock if cache is still valid
-    if not force and _last_fetch_success and now - _last_fetch_epoch < CACHE_SECONDS:
+    if (
+        not force
+        and not manual_rest_override
+        and _last_fetch_success
+        and now - _last_fetch_epoch < CACHE_SECONDS
+    ):
         return
 
     with _lock:
         now = time.time()
         if (
             not force
+            and not manual_rest_override
             and _last_fetch_success
             and now - _last_fetch_epoch < CACHE_SECONDS
         ):
@@ -615,18 +985,64 @@ def fetch_snds_data(force: bool = False) -> None:
 
         fetch_start = time.time()
         try:
-            data_url, request_params = _extract_data_url_and_params()
-            response = _session.get(
-                data_url,
-                params=request_params,
-                timeout=REQUEST_TIMEOUT,
-                verify=VERIFY_TLS,
+            request_candidates = _build_rest_request_candidates(
+                rest_api_date=rest_api_date,
+                rest_api_ip=rest_api_ip,
             )
-            response.raise_for_status()
+            response = None
+            last_exc = None
+            for data_url, request_params, request_headers in request_candidates:
+                response = _request_with_rest_fallback(
+                    data_url,
+                    request_params,
+                    request_headers,
+                )
+                try:
+                    response.raise_for_status()
+                    if len(request_candidates) > 1:
+                        logger.info(
+                            "Using SNDS REST report date from %s",
+                            data_url.rsplit("/", 1)[-1],
+                        )
+                    break
+                except requests.RequestException as exc:
+                    last_exc = exc
+                    if (
+                        response.status_code == 404
+                        and _is_rest_api_request(data_url, request_headers)
+                        and len(request_candidates) > 1
+                    ):
+                        continue
+                    raise
+            else:
+                if last_exc is not None:
+                    raise last_exc
+
             _validate_response(response)
             processed_rows = _update_gauges(response.text)
+            processed_status_rows = 0
+            if _load_access_token():
+                status_url, status_params, status_headers = _build_status_request()
+                status_response = _request_with_rest_fallback(
+                    status_url,
+                    status_params,
+                    status_headers,
+                )
+                status_response.raise_for_status()
+                _validate_response(status_response)
+                processed_status_rows = _update_ip_status_gauges(status_response.text)
             fetch_parse_error_gauge.set(0)
         except requests.RequestException as exc:
+            if (
+                "response" in locals()
+                and getattr(response, "status_code", None) is not None
+            ):
+                logger.error(_http_error_details(response))
+            if (
+                "status_response" in locals()
+                and getattr(status_response, "status_code", None) is not None
+            ):
+                logger.error(_http_error_details(status_response))
             logger.exception("Failed to fetch SNDS data: %s", exc)
             fetch_success_gauge.set(0)
             fetch_parse_error_gauge.set(0)
@@ -644,7 +1060,11 @@ def fetch_snds_data(force: bool = False) -> None:
 
         fetch_duration = time.time() - fetch_start
 
-        logger.info("Fetched SNDS data for %s IP rows.", processed_rows)
+        logger.info(
+            "Fetched SNDS data for %s IP rows and SNDS IP status for %s IP rows.",
+            processed_rows,
+            processed_status_rows,
+        )
         _last_fetch_epoch = time.time()
         _last_fetch_success = True
         fetch_success_gauge.set(1)
@@ -666,7 +1086,13 @@ def livez():
 
 @app.route("/metrics")
 def metrics():
-    fetch_snds_data()
+    rest_api_date = request.args.get("date")
+    rest_api_ip = request.args.get("ip")
+    fetch_snds_data(
+        force=rest_api_date is not None or rest_api_ip is not None,
+        rest_api_date=rest_api_date,
+        rest_api_ip=rest_api_ip,
+    )
     return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 

@@ -52,7 +52,7 @@ test:
 
 .PHONY: verify-python
 verify-python:
-	python3 -m compileall rootfs/usr/local/bin/exporter.py tests/test_exporter.py
+	python3 -m compileall rootfs/usr/local/bin/exporter.py rootfs/usr/local/bin/snds_token_helper.py tests/test_exporter.py
 
 .PHONY: lint
 lint: _check-for-changed-files

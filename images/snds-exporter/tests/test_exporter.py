@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -45,14 +46,45 @@ class FakeFlask:
 
 
 class FakeResponse:
-    def __init__(self, body="", headers=None):
+    def __init__(
+        self,
+        body="",
+        headers=None,
+        status_code=200,
+        ok=True,
+        mimetype=None,
+        **_kwargs,
+    ):
         self.text = body
         self.headers = headers or {}
+        self.status_code = status_code
+        self.ok = ok
+        self.mimetype = mimetype
+
+    def raise_for_status(self):
+        if not self.ok or self.status_code >= 400:
+            raise Exception(f"{self.status_code} error")
 
 
 class FakeSession:
     def __init__(self):
         self.headers = {}
+        self.responses = []
+        self.calls = []
+
+    def get(self, url, params=None, headers=None, timeout=None, verify=None):
+        self.calls.append(
+            {
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "timeout": timeout,
+                "verify": verify,
+            }
+        )
+        if self.responses:
+            return self.responses.pop(0)
+        return FakeResponse()
 
 
 def load_exporter_module():
@@ -64,6 +96,7 @@ def load_exporter_module():
     fake_flask = types.ModuleType("flask")
     fake_flask.Flask = FakeFlask
     fake_flask.Response = FakeResponse
+    fake_flask.request = types.SimpleNamespace(args={})
 
     fake_prom = types.ModuleType("prometheus_client")
     fake_prom.CONTENT_TYPE_LATEST = "text/plain"
@@ -188,6 +221,226 @@ class ExporterTests(unittest.TestCase):
         EXPORTER._log_unknown_response_sample(
             '{"unexpected": "shape"}', ValueError("broken format")
         )
+
+    def test_parses_ip_status_json(self):
+        processed = EXPORTER._update_ip_status_gauges(
+            '[{"beginningIpAddress":"192.0.2.10","endingIpAddress":"192.0.2.20","blocked":"true","reason":"Blocked due to complaints"}]'
+        )
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(
+            EXPORTER.ip_status_blocked_gauge.samples[
+                (("range_start", "192.0.2.10"), ("range_end", "192.0.2.20"))
+            ],
+            1,
+        )
+
+    def test_parses_headerless_ip_status_csv(self):
+        processed = EXPORTER._update_ip_status_gauges(
+            "176.119.155.0,176.119.155.255,True,Blocked due to user complaints or other evidence of spamming\n"
+        )
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(
+            EXPORTER.ip_status_blocked_gauge.samples[
+                (("range_start", "176.119.155.0"), ("range_end", "176.119.155.255"))
+            ],
+            1,
+        )
+
+    def test_normalize_column_name_handles_camel_case(self):
+        self.assertEqual(EXPORTER._normalize_column_name("ipAddress"), "ip address")
+        self.assertEqual(
+            EXPORTER._normalize_column_name("trapMessagePeriod"),
+            "trap message period",
+        )
+
+    def test_build_request_uses_rest_api_with_bearer_token(self):
+        original_token = EXPORTER.SNDS_ACCESS_TOKEN
+        original_token_file = EXPORTER.SNDS_ACCESS_TOKEN_FILE
+        original_rest_api_url = EXPORTER.REST_API_URL
+        original_rest_api_date = EXPORTER.REST_API_DATE
+        original_rest_api_ip = EXPORTER.REST_API_IP
+        original_default_rest_api_dates = EXPORTER._default_rest_api_dates
+        try:
+            EXPORTER.SNDS_ACCESS_TOKEN = "token-value"
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = ""
+            EXPORTER.REST_API_URL = (
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data"
+            )
+            EXPORTER.REST_API_DATE = ""
+            EXPORTER.REST_API_IP = ""
+            EXPORTER._default_rest_api_dates = lambda: ["2026-06-09"]
+
+            data_url, params, headers = EXPORTER._build_rest_request_candidates()[0]
+
+            self.assertEqual(
+                data_url,
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data/2026-06-09",
+            )
+            self.assertEqual(params, {})
+            self.assertEqual(headers, {"Authorization": "Bearer token-value"})
+        finally:
+            EXPORTER.SNDS_ACCESS_TOKEN = original_token
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
+            EXPORTER.REST_API_URL = original_rest_api_url
+            EXPORTER.REST_API_DATE = original_rest_api_date
+            EXPORTER.REST_API_IP = original_rest_api_ip
+            EXPORTER._default_rest_api_dates = original_default_rest_api_dates
+
+    def test_build_request_appends_rest_api_date_and_ip(self):
+        original_token = EXPORTER.SNDS_ACCESS_TOKEN
+        original_token_file = EXPORTER.SNDS_ACCESS_TOKEN_FILE
+        original_rest_api_url = EXPORTER.REST_API_URL
+        original_rest_api_date = EXPORTER.REST_API_DATE
+        original_rest_api_ip = EXPORTER.REST_API_IP
+        try:
+            EXPORTER.SNDS_ACCESS_TOKEN = "token-value"
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = ""
+            EXPORTER.REST_API_URL = (
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data"
+            )
+            EXPORTER.REST_API_DATE = "2026-12-31"
+            EXPORTER.REST_API_IP = "192.0.2.4"
+
+            data_url, params, headers = EXPORTER._build_rest_request_candidates()[0]
+
+            self.assertEqual(
+                data_url,
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data/2026-12-31/192.0.2.4",
+            )
+            self.assertEqual(params, {})
+            self.assertEqual(headers, {"Authorization": "Bearer token-value"})
+        finally:
+            EXPORTER.SNDS_ACCESS_TOKEN = original_token
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
+            EXPORTER.REST_API_URL = original_rest_api_url
+            EXPORTER.REST_API_DATE = original_rest_api_date
+            EXPORTER.REST_API_IP = original_rest_api_ip
+
+    def test_load_access_token_reads_file(self):
+        original_token = EXPORTER.SNDS_ACCESS_TOKEN
+        original_token_file = EXPORTER.SNDS_ACCESS_TOKEN_FILE
+        try:
+            EXPORTER.SNDS_ACCESS_TOKEN = ""
+            with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as token_file:
+                token_file.write("file-token\n")
+                token_file.flush()
+                EXPORTER.SNDS_ACCESS_TOKEN_FILE = token_file.name
+
+                self.assertEqual(EXPORTER._load_access_token(), "file-token")
+        finally:
+            EXPORTER.SNDS_ACCESS_TOKEN = original_token
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
+
+    def test_default_rest_api_date_uses_yesterday_in_utc(self):
+        class FakeDateTime(EXPORTER.dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 6, 10, 3, 15, tzinfo=EXPORTER.dt.timezone.utc)
+
+        original_datetime = EXPORTER.dt.datetime
+        try:
+            EXPORTER.dt.datetime = FakeDateTime
+            self.assertEqual(EXPORTER._default_rest_api_date(), "2026-06-09")
+            self.assertEqual(
+                EXPORTER._default_rest_api_dates()[:3],
+                ["2026-06-09", "2026-06-08", "2026-06-07"],
+            )
+        finally:
+            EXPORTER.dt.datetime = original_datetime
+
+    def test_fetch_snds_data_looks_back_for_latest_available_rest_date(self):
+        original_token = EXPORTER.SNDS_ACCESS_TOKEN
+        original_rest_api_date = EXPORTER.REST_API_DATE
+        original_default_rest_api_dates = EXPORTER._default_rest_api_dates
+        original_status_api_url = EXPORTER.STATUS_API_URL
+        try:
+            EXPORTER.SNDS_ACCESS_TOKEN = "token-value"
+            EXPORTER.REST_API_DATE = ""
+            EXPORTER.STATUS_API_URL = "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip"
+            EXPORTER._default_rest_api_dates = lambda: ["2026-06-09", "2026-06-08"]
+            EXPORTER._session.responses = [
+                FakeResponse(status_code=404, ok=False),
+                FakeResponse(status_code=404, ok=False),
+                FakeResponse(
+                    body='[{"ipAddress":"192.0.2.10","dataCommands":1,"filterResult":"GREEN"}]'
+                ),
+                FakeResponse(
+                    body='[{"beginningIpAddress":"192.0.2.10","endingIpAddress":"192.0.2.20","blocked":"true","reason":"Blocked due to complaints"}]'
+                ),
+            ]
+
+            EXPORTER.fetch_snds_data(force=True)
+
+            self.assertEqual(
+                EXPORTER._session.calls[-1]["url"],
+                "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip",
+            )
+            self.assertEqual(
+                EXPORTER._session.calls[-2]["url"],
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data/2026-06-08",
+            )
+        finally:
+            EXPORTER.SNDS_ACCESS_TOKEN = original_token
+            EXPORTER.REST_API_DATE = original_rest_api_date
+            EXPORTER._default_rest_api_dates = original_default_rest_api_dates
+            EXPORTER.STATUS_API_URL = original_status_api_url
+
+    def test_request_with_rest_fallback_retries_with_trailing_slash(self):
+        EXPORTER._session.responses = [
+            FakeResponse(status_code=404, ok=False),
+            FakeResponse(
+                body='[{"ipAddress":"192.0.2.10","dataCommands":1,"filterResult":"GREEN"}]'
+            ),
+        ]
+
+        response = EXPORTER._request_with_rest_fallback(
+            "https://substrate.office.com/ip-domain-management-snds/api/report/data",
+            {},
+            {"Authorization": "Bearer token"},
+        )
+
+        self.assertEqual(
+            [call["url"] for call in EXPORTER._session.calls[-2:]],
+            [
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data",
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data/",
+            ],
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_metrics_query_params_override_rest_request_path(self):
+        original_token = EXPORTER.SNDS_ACCESS_TOKEN
+        original_request_args = EXPORTER.request.args
+        original_status_api_url = EXPORTER.STATUS_API_URL
+        try:
+            EXPORTER.SNDS_ACCESS_TOKEN = "token-value"
+            EXPORTER.STATUS_API_URL = "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip"
+            EXPORTER.request.args = {"date": "2026-12-31", "ip": "192.0.2.4"}
+            EXPORTER._session.responses = [
+                FakeResponse(
+                    body='[{"ipAddress":"192.0.2.10","dataCommands":1,"filterResult":"GREEN"}]'
+                ),
+                FakeResponse(
+                    body='[{"beginningIpAddress":"192.0.2.10","endingIpAddress":"192.0.2.20","blocked":"true","reason":"Blocked due to complaints"}]'
+                ),
+            ]
+
+            EXPORTER.metrics()
+
+            self.assertEqual(
+                EXPORTER._session.calls[-2]["url"],
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data/2026-12-31/192.0.2.4",
+            )
+            self.assertEqual(
+                EXPORTER._session.calls[-1]["url"],
+                "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip",
+            )
+        finally:
+            EXPORTER.SNDS_ACCESS_TOKEN = original_token
+            EXPORTER.request.args = original_request_args
+            EXPORTER.STATUS_API_URL = original_status_api_url
 
 
 if __name__ == "__main__":
