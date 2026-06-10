@@ -9,7 +9,7 @@ import threading
 import time
 from io import StringIO
 from typing import Optional
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote
 
 import requests
 from flask import Flask, Response, request
@@ -77,12 +77,6 @@ fetch_parse_error_gauge = Gauge(
 )
 
 # Configuration sourced from environment
-API_URL = os.getenv(
-    "API_URL",
-    "https://substrate.office.com/ip-domain-management-snds/SNDS/DataKey",
-)
-API_KEY = os.getenv("API_KEY", "")
-AUTOMATED_DATA_ACCESS_URL = os.getenv("AUTOMATED_DATA_ACCESS_URL", "")
 REST_API_URL = os.getenv(
     "REST_API_URL",
     "https://substrate.office.com/ip-domain-management-snds/api/report/data",
@@ -221,34 +215,6 @@ def _parse_complaint_rate(value: str) -> Optional[float]:
         return None
 
 
-def _extract_data_url_and_params() -> tuple[str, dict[str, str]]:
-    data_url = AUTOMATED_DATA_ACCESS_URL or API_URL
-    if not data_url:
-        raise ValueError("Neither AUTOMATED_DATA_ACCESS_URL nor API_URL is set.")
-
-    parsed_url = urlsplit(data_url)
-    params = {
-        name: value
-        for name, value in parse_qsl(parsed_url.query, keep_blank_values=True)
-        if name.lower() != "key"
-    }
-    clean_query = urlencode(params)
-    data_url = urlunsplit(
-        (
-            parsed_url.scheme,
-            parsed_url.netloc,
-            parsed_url.path,
-            clean_query,
-            parsed_url.fragment,
-        )
-    )
-
-    if API_KEY and not AUTOMATED_DATA_ACCESS_URL:
-        params["Key"] = API_KEY
-
-    return data_url, params
-
-
 def _load_access_token() -> str:
     token_file_path = SNDS_ACCESS_TOKEN_FILE or _default_token_file_path()
     if token_file_path and os.path.exists(token_file_path):
@@ -276,24 +242,25 @@ def _build_request(
     rest_api_ip: Optional[str] = None,
 ) -> tuple[str, dict[str, str], dict[str, str]]:
     access_token = _load_access_token()
-    if access_token:
-        selected_date = (REST_API_DATE if rest_api_date is None else rest_api_date).strip()
-        selected_ip = (REST_API_IP if rest_api_ip is None else rest_api_ip).strip()
-        if not selected_date:
-            selected_date = _default_rest_api_date()
-        rest_api_url = REST_API_URL.rstrip("/")
-        if selected_date:
-            rest_api_url = f"{rest_api_url}/{quote(selected_date, safe='')}"
-        if selected_ip:
-            rest_api_url = f"{rest_api_url}/{quote(selected_ip, safe='')}"
-        return (
-            rest_api_url,
-            {},
-            {"Authorization": f"Bearer {access_token}"},
+    if not access_token:
+        raise ValueError(
+            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
         )
 
-    data_url, request_params = _extract_data_url_and_params()
-    return data_url, request_params, {}
+    selected_date = (REST_API_DATE if rest_api_date is None else rest_api_date).strip()
+    selected_ip = (REST_API_IP if rest_api_ip is None else rest_api_ip).strip()
+    if not selected_date:
+        selected_date = _default_rest_api_date()
+    rest_api_url = REST_API_URL.rstrip("/")
+    if selected_date:
+        rest_api_url = f"{rest_api_url}/{quote(selected_date, safe='')}"
+    if selected_ip:
+        rest_api_url = f"{rest_api_url}/{quote(selected_ip, safe='')}"
+    return (
+        rest_api_url,
+        {},
+        {"Authorization": f"Bearer {access_token}"},
+    )
 
 
 def _build_rest_request_candidates(
@@ -302,8 +269,9 @@ def _build_rest_request_candidates(
 ) -> list[tuple[str, dict[str, str], dict[str, str]]]:
     access_token = _load_access_token()
     if not access_token:
-        data_url, request_params = _extract_data_url_and_params()
-        return [(data_url, request_params, {})]
+        raise ValueError(
+            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
+        )
 
     selected_date = (REST_API_DATE if rest_api_date is None else rest_api_date).strip()
     selected_ip = (REST_API_IP if rest_api_ip is None else rest_api_ip).strip()
@@ -980,9 +948,9 @@ def fetch_snds_data(
     global _last_fetch_epoch, _last_fetch_success
     manual_rest_override = rest_api_date is not None or rest_api_ip is not None
 
-    if not _load_access_token() and not API_KEY and not AUTOMATED_DATA_ACCESS_URL:
+    if not _load_access_token():
         logger.error(
-            "No SNDS API credentials are configured. Set SNDS_ACCESS_TOKEN, SNDS_ACCESS_TOKEN_FILE, AUTOMATED_DATA_ACCESS_URL, or API_KEY."
+            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
         )
         fetch_success_gauge.set(0)
         return

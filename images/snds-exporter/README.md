@@ -2,7 +2,7 @@
 
 `snds-exporter` is a small Prometheus exporter for Microsoft Smart Network Data Services (SNDS).
 
-It fetches report data from the SNDS REST API or the legacy automated data access endpoint, converts the response into Prometheus gauges, and exposes them on port `9100`.
+It fetches report data from the SNDS REST API, converts the response into Prometheus gauges, and exposes them on port `9100`.
 
 ## Repository Fit
 
@@ -14,17 +14,10 @@ The image metadata and version tags are derived from `Dockerfile`.
 
 ### Required Configuration
 
-Preferred:
-
 - `SNDS_ACCESS_TOKEN`: OAuth bearer token for the SNDS REST API.
 - `SNDS_ACCESS_TOKEN_FILE`: Path to a file containing the OAuth bearer token for the SNDS REST API.
 
 If `SNDS_ACCESS_TOKEN_FILE` is unset, the exporter automatically looks for the helper's default token file at `~/.local/state/snds-exporter/access-token`.
-
-Legacy fallback:
-
-- `AUTOMATED_DATA_ACCESS_URL`: Full SNDS automated data access URL.
-- `API_KEY`: SNDS key used for the `Key` query parameter when `AUTOMATED_DATA_ACCESS_URL` is not provided.
 
 ### Optional Configuration
 
@@ -33,7 +26,6 @@ Legacy fallback:
 - `REST_API_DATE`: Optional SNDS REST report date in `YYYY-MM-DD` format. Appended as `/REST_API_DATE`. If unset, the exporter starts with yesterday's date in UTC and automatically looks back a few days if Microsoft has not published that report yet.
 - `REST_API_IP`: Optional SNDS REST IPv4 filter. Appended after `REST_API_DATE` as `/REST_API_IP`.
 - `REST_API_LOOKBACK_DAYS`: Number of UTC dates to try when `REST_API_DATE` is unset. Default: `3`
-- `API_URL`: SNDS data endpoint base URL. Default: `https://substrate.office.com/ip-domain-management-snds/SNDS/DataKey`
 - `REQUEST_TIMEOUT`: HTTP timeout in seconds. Default: `10`
 - `CACHE_SECONDS`: Cache duration before the next upstream fetch. Default: `300`
 - `VERIFY_TLS`: Enable or disable TLS verification. Default: `true`
