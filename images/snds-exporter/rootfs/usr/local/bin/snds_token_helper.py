@@ -113,16 +113,16 @@ def _build_auth_url(state: str, code_challenge: str, nonce: str) -> str:
 
 
 def _prompt_for_redirect_response(auth_url: str, expected_state: str) -> dict[str, str]:
-    logger.info("Open this URL in your local browser and complete the Microsoft sign-in:")
+    logger.info(
+        "Open this URL in your local browser and complete the Microsoft sign-in:"
+    )
     print(auth_url)
     print()
     logger.info(
         "After login, the browser will redirect to %s and likely show a connection error.",
         MANUAL_REDIRECT_URI,
     )
-    logger.info(
-        "Copy the full URL from the browser address bar and paste it here."
-    )
+    logger.info("Copy the full URL from the browser address bar and paste it here.")
     redirect_url = input("Redirect URL: ").strip()
     if not redirect_url:
         raise RuntimeError("No redirect URL was provided.")

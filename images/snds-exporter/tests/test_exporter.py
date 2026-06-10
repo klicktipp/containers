@@ -358,9 +358,7 @@ class ExporterTests(unittest.TestCase):
         try:
             EXPORTER.SNDS_ACCESS_TOKEN = "token-value"
             EXPORTER.REST_API_DATE = ""
-            EXPORTER.STATUS_API_URL = (
-                "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip"
-            )
+            EXPORTER.STATUS_API_URL = "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip"
             EXPORTER._default_rest_api_dates = lambda: ["2026-06-09", "2026-06-08"]
             EXPORTER._session.responses = [
                 FakeResponse(status_code=404, ok=False),
@@ -392,7 +390,9 @@ class ExporterTests(unittest.TestCase):
     def test_request_with_rest_fallback_retries_with_trailing_slash(self):
         EXPORTER._session.responses = [
             FakeResponse(status_code=404, ok=False),
-            FakeResponse(body='[{"ipAddress":"192.0.2.10","dataCommands":1,"filterResult":"GREEN"}]'),
+            FakeResponse(
+                body='[{"ipAddress":"192.0.2.10","dataCommands":1,"filterResult":"GREEN"}]'
+            ),
         ]
 
         response = EXPORTER._request_with_rest_fallback(
@@ -416,9 +416,7 @@ class ExporterTests(unittest.TestCase):
         original_status_api_url = EXPORTER.STATUS_API_URL
         try:
             EXPORTER.SNDS_ACCESS_TOKEN = "token-value"
-            EXPORTER.STATUS_API_URL = (
-                "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip"
-            )
+            EXPORTER.STATUS_API_URL = "https://substrate.office.com/ip-domain-management-snds/api/report/status/ip"
             EXPORTER.request.args = {"date": "2026-12-31", "ip": "192.0.2.4"}
             EXPORTER._session.responses = [
                 FakeResponse(

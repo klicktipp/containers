@@ -134,7 +134,9 @@ def _default_token_file_path() -> str:
     xdg_state_home = os.getenv("XDG_STATE_HOME")
     if xdg_state_home:
         return os.path.join(xdg_state_home, "snds-exporter", "access-token")
-    return os.path.join(os.path.expanduser("~"), ".local", "state", "snds-exporter", "access-token")
+    return os.path.join(
+        os.path.expanduser("~"), ".local", "state", "snds-exporter", "access-token"
+    )
 
 
 def _normalize_column_name(value: str) -> str:
@@ -796,7 +798,9 @@ def _update_ip_status_gauges_from_json(json_content: str) -> int:
                 break
 
     if not isinstance(payload, list):
-        raise ValueError("SNDS status JSON response does not contain a list of records.")
+        raise ValueError(
+            "SNDS status JSON response does not contain a list of records."
+        )
 
     processed_rows = 0
     last_sample_keys: list[str] = []
@@ -883,11 +887,15 @@ def _update_ip_status_gauges_from_csv(csv_content: str) -> int:
                 processed_rows += 1
 
             if processed_rows == 0:
-                raise ValueError("SNDS status CSV did not contain any usable data rows.")
+                raise ValueError(
+                    "SNDS status CSV did not contain any usable data rows."
+                )
             return processed_rows
 
         sample_row = " | ".join(cell.strip() for cell in rows[0][:12])
-        raise ValueError(f"SNDS status CSV format is unsupported. First row: {sample_row}")
+        raise ValueError(
+            f"SNDS status CSV format is unsupported. First row: {sample_row}"
+        )
 
     processed_rows = 0
     for row in data_rows:
@@ -992,7 +1000,10 @@ def fetch_snds_data(
                 try:
                     response.raise_for_status()
                     if len(request_candidates) > 1:
-                        logger.info("Using SNDS REST report date from %s", data_url.rsplit("/", 1)[-1])
+                        logger.info(
+                            "Using SNDS REST report date from %s",
+                            data_url.rsplit("/", 1)[-1],
+                        )
                     break
                 except requests.RequestException as exc:
                     last_exc = exc
@@ -1022,9 +1033,15 @@ def fetch_snds_data(
                 processed_status_rows = _update_ip_status_gauges(status_response.text)
             fetch_parse_error_gauge.set(0)
         except requests.RequestException as exc:
-            if "response" in locals() and getattr(response, "status_code", None) is not None:
+            if (
+                "response" in locals()
+                and getattr(response, "status_code", None) is not None
+            ):
                 logger.error(_http_error_details(response))
-            if "status_response" in locals() and getattr(status_response, "status_code", None) is not None:
+            if (
+                "status_response" in locals()
+                and getattr(status_response, "status_code", None) is not None
+            ):
                 logger.error(_http_error_details(status_response))
             logger.exception("Failed to fetch SNDS data: %s", exc)
             fetch_success_gauge.set(0)
