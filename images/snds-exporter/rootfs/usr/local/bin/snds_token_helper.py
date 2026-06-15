@@ -186,6 +186,7 @@ def _refresh_access_token(cache_path: Path, token_path: Path) -> int | None:
     if not refresh_token:
         return None
 
+    logger.info("Refreshing SNDS access token using cached refresh token.")
     result = _exchange_token(
         {
             "client_id": CLIENT_ID,
