@@ -42,7 +42,7 @@ When REST authentication is used, the exporter fetches both the dated data repor
 
 Microsoft's legacy SNDS links can expire. The recommended setup for the exporter is therefore the REST API plus a host-side token refresher.
 
-The repository includes a helper script at `rootfs/usr/local/bin/snds_token_helper.py`. The built image contains it at `/usr/local/bin/snds_token_helper.py`. It performs the SNDS OAuth flow directly, stores a refresh token cache on the host, writes the current bearer token to a local file, and can keep refreshing it before expiry.
+The repository includes a helper script at `rootfs/usr/local/bin/snds_token_helper.py`. The built image contains it at `/usr/local/bin/snds_token_helper.py`. It performs the SNDS OAuth flow directly, requests the `offline_access` scope during the initial login, stores the returned refresh token in a local cache file, writes the current bearer token to a local file, and can keep refreshing it before expiry.
 
 Install the helper dependencies on the host:
 
