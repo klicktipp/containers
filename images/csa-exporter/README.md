@@ -14,7 +14,12 @@ The image metadata and version tags are derived from `Dockerfile`.
 
 ### Required Configuration
 
-- `CSA_API_KEY`: API key used for the `Authorization: ApiKey ...` header.
+- `CSA_API_TOKEN`: Base64 token from the CSA UI, without the `ApiKey ` prefix.
+
+Or:
+
+- `CSA_API_ID`: Credential identifier, the left side of `id:secret`
+- `CSA_API_SECRET`: API key secret
 
 ### Optional Configuration
 
@@ -23,7 +28,11 @@ The image metadata and version tags are derived from `Dockerfile`.
 - `LOG_LEVEL`: Python log level. Default: `INFO`
 - `PORT`: HTTP listen port. Default: `9100`
 
-If `CSA_API_KEY` is unset, the exporter still starts but logs an authentication warning and upstream requests will fail until a valid key is provided.
+If `CSA_API_TOKEN` is unset, the exporter builds the base64 token from `CSA_API_ID` and `CSA_API_SECRET` as `id:secret`.
+
+If `CSA_API_TOKEN` is set, it always takes precedence.
+
+In both cases, the exporter sends `Authorization: ApiKey <token>`.
 
 ## Exposed Endpoints
 
@@ -48,12 +57,19 @@ docker build -t local/csa-exporter:latest .
 Run with a direct environment override:
 
 ```sh
-CSA_API_KEY=your-key make run
+CSA_API_TOKEN=your-base64-value make run
 ```
 
 Or with a local env file:
 
 ```sh
-printf 'CSA_API_KEY=your-key\n' > .local.env
+printf 'CSA_API_TOKEN=your-base64-value\n' > .local.env
+make run
+```
+
+Alternative if you have the two raw parts instead of the ready-made value:
+
+```sh
+printf 'CSA_API_ID=your-api-id\nCSA_API_SECRET=your-api-secret\n' > .local.env
 make run
 ```

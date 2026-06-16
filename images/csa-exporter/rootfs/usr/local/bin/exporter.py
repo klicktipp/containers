@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import time
@@ -91,16 +92,35 @@ def _load_timeout() -> int:
 API_URL = os.getenv("CSA_API_URL", "https://monitor.certified-senders.org/api/v1").rstrip(
     "/"
 )
-API_KEY = os.getenv("CSA_API_KEY", "").strip()
+API_TOKEN = os.getenv("CSA_API_TOKEN", "").strip()
+API_ID = os.getenv("CSA_API_ID", "").strip()
+API_SECRET = os.getenv("CSA_API_SECRET", "").strip()
 REQUEST_TIMEOUT = _load_timeout()
+
+
+def _build_authorization_header() -> str:
+    """Return the Authorization header value for the configured auth mode."""
+
+    if API_TOKEN:
+        return f"ApiKey {API_TOKEN}"
+
+    if API_ID and API_SECRET:
+        auth_bytes = f"{API_ID}:{API_SECRET}".encode("utf-8")
+        return f"ApiKey {base64.b64encode(auth_bytes).decode('ascii')}"
+
+    return ""
+
 
 session = requests.Session()
 session.headers.update({"User-Agent": "CSA Metrics Exporter/1.0"})
-if API_KEY:
-    session.headers["Authorization"] = f"ApiKey {API_KEY}"
+authorization_header = _build_authorization_header()
+if authorization_header:
+    session.headers["Authorization"] = authorization_header
 else:
     logger.warning(
-        "CSA_API_KEY is not set; exporter will not be able to authenticate against the CSA API."
+        "No CSA API authentication is configured. Set CSA_API_TOKEN to the "
+        "base64 token from the CSA UI, or set CSA_API_ID together with "
+        "CSA_API_SECRET."
     )
 
 

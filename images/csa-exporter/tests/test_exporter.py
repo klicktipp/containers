@@ -3,6 +3,7 @@ import os
 import sys
 import types
 import unittest
+from base64 import b64encode
 from pathlib import Path
 from unittest import mock
 
@@ -156,6 +157,29 @@ class ExporterTests(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {"CSA_API_TIMEOUT": "0"}, clear=True):
             self.assertEqual(self.exporter._load_timeout(), 10)
+
+    def test_build_authorization_header_prefers_explicit_header(self):
+        with mock.patch.dict(
+            self.exporter.os.environ,
+            {"CSA_API_TOKEN": "abc", "CSA_API_ID": "name", "CSA_API_SECRET": "secret"},
+            clear=True,
+        ):
+            self.exporter.API_TOKEN = self.exporter.os.getenv("CSA_API_TOKEN", "").strip()
+            self.exporter.API_ID = self.exporter.os.getenv("CSA_API_ID", "").strip()
+            self.exporter.API_SECRET = self.exporter.os.getenv("CSA_API_SECRET", "").strip()
+            self.assertEqual(self.exporter._build_authorization_header(), "ApiKey abc")
+
+    def test_build_authorization_header_uses_base64_name_and_key(self):
+        with mock.patch.dict(
+            self.exporter.os.environ,
+            {"CSA_API_ID": "name", "CSA_API_SECRET": "secret"},
+            clear=True,
+        ):
+            self.exporter.API_TOKEN = self.exporter.os.getenv("CSA_API_TOKEN", "").strip()
+            self.exporter.API_ID = self.exporter.os.getenv("CSA_API_ID", "").strip()
+            self.exporter.API_SECRET = self.exporter.os.getenv("CSA_API_SECRET", "").strip()
+            expected = b64encode(b"name:secret").decode("ascii")
+            self.assertEqual(self.exporter._build_authorization_header(), f"ApiKey {expected}")
 
     def test_normalize_date_rejects_invalid_input(self):
         self.assertEqual(self.exporter._normalize_date(' "2026-06-15" '), "2026-06-15")
