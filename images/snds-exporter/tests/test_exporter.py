@@ -140,6 +140,8 @@ class ExporterTests(unittest.TestCase):
         EXPORTER._access_token_cache = ""
         EXPORTER._access_token_expires_at = None
         EXPORTER._refresh_token_cache = ""
+        EXPORTER._last_fetch_epoch = 0.0
+        EXPORTER._last_fetch_success = False
         EXPORTER._update_gauges(
             "Ip Address,Activity period,RCPT commands,DATA commands,Message recipients,"
             "Filter result,Complaint rate,Trap message period,Trap hits,JMR P1 Sender,Comments\n"
@@ -384,6 +386,30 @@ class ExporterTests(unittest.TestCase):
             EXPORTER.SNDS_ACCESS_TOKEN = original_token
             EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
 
+    def test_load_token_cache_ignores_empty_file(self):
+        original_cache_file = EXPORTER.SNDS_TOKEN_CACHE_FILE
+        try:
+            with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as cache_file:
+                cache_file.write("")
+                cache_file.flush()
+                EXPORTER.SNDS_TOKEN_CACHE_FILE = cache_file.name
+
+                self.assertEqual(EXPORTER._load_token_cache(), {})
+        finally:
+            EXPORTER.SNDS_TOKEN_CACHE_FILE = original_cache_file
+
+    def test_load_token_cache_ignores_invalid_json(self):
+        original_cache_file = EXPORTER.SNDS_TOKEN_CACHE_FILE
+        try:
+            with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as cache_file:
+                cache_file.write("not-json")
+                cache_file.flush()
+                EXPORTER.SNDS_TOKEN_CACHE_FILE = cache_file.name
+
+                self.assertEqual(EXPORTER._load_token_cache(), {})
+        finally:
+            EXPORTER.SNDS_TOKEN_CACHE_FILE = original_cache_file
+
     def test_default_rest_api_date_uses_yesterday_in_utc(self):
         class FakeDateTime(EXPORTER.dt.datetime):
             @classmethod
@@ -492,6 +518,72 @@ class ExporterTests(unittest.TestCase):
             EXPORTER.SNDS_ACCESS_TOKEN = original_token
             EXPORTER.request.args = original_request_args
             EXPORTER.STATUS_API_URL = original_status_api_url
+
+    def test_healthz_is_ready_without_auth_material(self):
+        body, status = EXPORTER.healthz()
+
+        self.assertEqual(body, "OK")
+        self.assertEqual(status, 200)
+
+    def test_healthz_is_ready_before_first_fetch_with_auth_material(self):
+        original_token = EXPORTER.SNDS_ACCESS_TOKEN
+        original_token_file = EXPORTER.SNDS_ACCESS_TOKEN_FILE
+        try:
+            EXPORTER.SNDS_ACCESS_TOKEN = "token-value"
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = ""
+
+            body, status = EXPORTER.healthz()
+
+            self.assertEqual(body, "OK")
+            self.assertEqual(status, 200)
+        finally:
+            EXPORTER.SNDS_ACCESS_TOKEN = original_token
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
+
+    def test_healthz_returns_503_after_failed_fetch(self):
+        original_token = EXPORTER.SNDS_ACCESS_TOKEN
+        original_token_file = EXPORTER.SNDS_ACCESS_TOKEN_FILE
+        try:
+            EXPORTER.SNDS_ACCESS_TOKEN = "token-value"
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = ""
+            EXPORTER._last_fetch_epoch = 1.0
+            EXPORTER._last_fetch_success = False
+
+            body, status = EXPORTER.healthz()
+
+            self.assertEqual(body, "SNDS data not yet available")
+            self.assertEqual(status, 503)
+        finally:
+            EXPORTER.SNDS_ACCESS_TOKEN = original_token
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
+
+    def test_has_auth_material_reloads_updated_files_after_empty_bootstrap(self):
+        original_token = EXPORTER.SNDS_ACCESS_TOKEN
+        original_token_file = EXPORTER.SNDS_ACCESS_TOKEN_FILE
+        original_cache_file = EXPORTER.SNDS_TOKEN_CACHE_FILE
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                token_path = Path(temp_dir) / "access-token"
+                cache_path = Path(temp_dir) / "token-cache.json"
+                token_path.write_text("", encoding="utf-8")
+                cache_path.write_text("", encoding="utf-8")
+                EXPORTER.SNDS_ACCESS_TOKEN = ""
+                EXPORTER.SNDS_ACCESS_TOKEN_FILE = str(token_path)
+                EXPORTER.SNDS_TOKEN_CACHE_FILE = str(cache_path)
+
+                self.assertFalse(EXPORTER._has_auth_material())
+
+                token_path.write_text("new-token\n", encoding="utf-8")
+                cache_path.write_text(
+                    '{"access_token_expires_at": 9999999999, "refresh_token": "refresh-value"}',
+                    encoding="utf-8",
+                )
+
+                self.assertTrue(EXPORTER._has_auth_material())
+        finally:
+            EXPORTER.SNDS_ACCESS_TOKEN = original_token
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
+            EXPORTER.SNDS_TOKEN_CACHE_FILE = original_cache_file
 
 
 if __name__ == "__main__":

@@ -93,10 +93,39 @@ If silent refresh stops working, the exporter logs the failure to stdout and kee
 
 In Kubernetes, mount both files from a Secret. If you want refreshed token state to survive pod restarts and be shared across replicas, set `K8S_SECRET_NAME` and let the exporter patch that Secret after a successful refresh.
 
+The Helm chart in this repository bootstraps that Secret as empty by default so the pod can start before the first login is completed. In that state, `/metrics` will log authentication errors until valid token state exists.
+
+### Kubernetes Bootstrap
+
+The most reliable first-run flow in Kubernetes is:
+
+1. Deploy the chart so the pod starts with the empty bootstrap Secret.
+2. Run the interactive login inside the running pod:
+
+```sh
+kubectl exec -it deploy/snds-exporter -- python3 /usr/local/bin/snds_token_helper.py
+```
+
+3. Complete the Microsoft login in your local browser and paste the final redirect URL back into the shell.
+4. Restart the workload once so the exporter definitely reopens the updated Secret contents:
+
+```sh
+kubectl rollout restart deployment/snds-exporter
+```
+
+If your release name or namespace differs, adjust the resource name accordingly, for example:
+
+```sh
+kubectl -n monitoring exec -it deploy/my-snds-exporter -- python3 /usr/local/bin/snds_token_helper.py
+kubectl -n monitoring rollout restart deployment/my-snds-exporter
+```
+
+The restart is documented here as the reliable path. Kubernetes updates mounted Secret volumes asynchronously, so immediate reuse without a restart is not guaranteed at the exact moment the initial login completes.
+
 ## Exposed Endpoints
 
 - `/metrics`: Prometheus metrics endpoint
-- `/healthz`: Returns `200` after at least one successful SNDS fetch
+- `/healthz`: Returns `200` while the process is healthy, including bootstrap before the first successful SNDS fetch
 - `/livez`: Basic liveness endpoint
 
 ## Local Validation

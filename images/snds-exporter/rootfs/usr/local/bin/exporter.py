@@ -218,7 +218,17 @@ def _load_token_cache() -> dict:
     if not cache_file_path or not os.path.exists(cache_file_path):
         return {}
     with open(cache_file_path, encoding="utf-8") as cache_file:
-        return json.load(cache_file)
+        raw_content = cache_file.read().strip()
+    if not raw_content:
+        return {}
+    try:
+        return json.loads(raw_content)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Ignoring invalid SNDS token cache JSON in %s until valid token state is written.",
+            cache_file_path,
+        )
+        return {}
 
 
 def _token_expiry_epoch(result: dict) -> int:
@@ -241,9 +251,9 @@ def _token_error(result: dict | None) -> str:
     return "Unknown token acquisition failure."
 
 
-def _load_auth_state() -> None:
+def _load_auth_state(force: bool = False) -> None:
     global _access_token_cache, _access_token_expires_at, _refresh_token_cache, _auth_state_loaded
-    if _auth_state_loaded:
+    if _auth_state_loaded and not force:
         return
 
     _access_token_cache = SNDS_ACCESS_TOKEN.strip()
@@ -484,6 +494,8 @@ def _load_access_token() -> str:
 
 def _has_auth_material() -> bool:
     _load_auth_state()
+    if not (_access_token_cache or _refresh_token_cache):
+        _load_auth_state(force=True)
     return bool(_access_token_cache or _refresh_token_cache)
 
 
@@ -1347,6 +1359,10 @@ def fetch_snds_data(
 
 @app.route("/healthz")
 def healthz():
+    if not _has_auth_material():
+        return "OK", 200
+    if _last_fetch_epoch == 0:
+        return "OK", 200
     if not _last_fetch_success:
         return "SNDS data not yet available", 503
     return "OK", 200

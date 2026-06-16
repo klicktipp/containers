@@ -29,6 +29,25 @@ TOKEN_SCOPES = [SNDS_SCOPE]
 MANUAL_REDIRECT_URI = "http://localhost"
 DEFAULT_REFRESH_BEFORE_SECONDS = 600
 DEFAULT_RETRY_SECONDS = 30
+K8S_SECRET_NAME = os.getenv("K8S_SECRET_NAME", "").strip()
+K8S_SECRET_NAMESPACE = os.getenv("K8S_SECRET_NAMESPACE", "").strip()
+K8S_SECRET_ACCESS_TOKEN_KEY = os.getenv(
+    "K8S_SECRET_ACCESS_TOKEN_KEY", "access-token"
+).strip()
+K8S_SECRET_CACHE_KEY = os.getenv("K8S_SECRET_CACHE_KEY", "token-cache.json").strip()
+K8S_API_URL = os.getenv("K8S_API_URL", "https://kubernetes.default.svc").rstrip("/")
+K8S_SERVICE_ACCOUNT_TOKEN_FILE = os.getenv(
+    "K8S_SERVICE_ACCOUNT_TOKEN_FILE",
+    "/var/run/secrets/kubernetes.io/serviceaccount/token",
+)
+K8S_SERVICE_ACCOUNT_CA_FILE = os.getenv(
+    "K8S_SERVICE_ACCOUNT_CA_FILE",
+    "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+)
+K8S_NAMESPACE_FILE = os.getenv(
+    "K8S_NAMESPACE_FILE",
+    "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(message)s")
 logger = logging.getLogger("snds-token-helper")
@@ -67,6 +86,74 @@ def _load_cache(cache_path: Path) -> dict:
 
 def _save_cache(cache_path: Path, payload: dict) -> None:
     _write_secure_json(cache_path, payload)
+
+
+def _service_account_namespace() -> str:
+    if K8S_SECRET_NAMESPACE:
+        return K8S_SECRET_NAMESPACE
+    if Path(K8S_NAMESPACE_FILE).exists():
+        return Path(K8S_NAMESPACE_FILE).read_text(encoding="utf-8").strip()
+    return ""
+
+
+def _patch_kubernetes_secret(access_token: str, cache_payload: dict) -> None:
+    if not K8S_SECRET_NAME:
+        return
+
+    namespace = _service_account_namespace()
+    if not namespace:
+        logger.warning(
+            "SNDS token update succeeded, but Kubernetes secret sync is disabled because no namespace was found."
+        )
+        return
+    token_path = Path(K8S_SERVICE_ACCOUNT_TOKEN_FILE)
+    if not token_path.exists():
+        logger.warning(
+            "SNDS token update succeeded, but Kubernetes secret sync is disabled because the service account token file is missing."
+        )
+        return
+
+    patch_payload = {
+        "data": {
+            K8S_SECRET_ACCESS_TOKEN_KEY: base64.b64encode(
+                (access_token + "\n").encode("utf-8")
+            ).decode("ascii"),
+            K8S_SECRET_CACHE_KEY: base64.b64encode(
+                (json.dumps(cache_payload, indent=2, sort_keys=True) + "\n").encode(
+                    "utf-8"
+                )
+            ).decode("ascii"),
+        }
+    }
+    verify_value: bool | str = (
+        K8S_SERVICE_ACCOUNT_CA_FILE if Path(K8S_SERVICE_ACCOUNT_CA_FILE).exists() else True
+    )
+
+    try:
+        service_account_token = token_path.read_text(encoding="utf-8").strip()
+        response = requests.patch(
+            f"{K8S_API_URL}/api/v1/namespaces/{namespace}/secrets/{K8S_SECRET_NAME}",
+            headers={
+                "Authorization": f"Bearer {service_account_token}",
+                "Content-Type": "application/merge-patch+json",
+            },
+            data=json.dumps(patch_payload),
+            timeout=30,
+            verify=verify_value,
+        )
+        response.raise_for_status()
+        logger.info(
+            "Updated Kubernetes secret %s/%s with SNDS token state.",
+            namespace,
+            K8S_SECRET_NAME,
+        )
+    except Exception as exc:
+        logger.warning(
+            "SNDS token update succeeded, but updating Kubernetes secret %s/%s failed: %s",
+            namespace,
+            K8S_SECRET_NAME,
+            exc,
+        )
 
 
 def _urlsafe_sha256(value: str) -> str:
@@ -160,15 +247,14 @@ def _store_tokens(token_path: Path, cache_path: Path, result: dict) -> int:
     access_token = result["access_token"].strip()
     expires_at = _token_expiry_epoch(result)
     refresh_token = result.get("refresh_token", "").strip()
+    cache_payload = {
+        "access_token_expires_at": expires_at,
+        "refresh_token": refresh_token,
+    }
 
     _write_secure_text(token_path, access_token + "\n")
-    _save_cache(
-        cache_path,
-        {
-            "access_token_expires_at": expires_at,
-            "refresh_token": refresh_token,
-        },
-    )
+    _save_cache(cache_path, cache_payload)
+    _patch_kubernetes_secret(access_token, cache_payload)
 
     logger.info(
         "Wrote refreshed SNDS access token to %s; expires at %s.",
