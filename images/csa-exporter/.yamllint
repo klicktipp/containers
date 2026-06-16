@@ -1,0 +1,40 @@
+---
+extends: default
+
+ignore: |
+  .git/
+
+rules:
+  comments:
+    min-spaces-from-content: 1
+  line-length: disable
+  new-line-at-end-of-file: enable
+  new-lines:
+    type: unix
+  braces:
+    # Keep 0 min-spaces to not error on empty {} collection definitions
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+    # set at least 1 space on non empty braces
+    min-spaces-inside: 1
+    max-spaces-inside: 1
+  brackets:
+    # Keep 0 min-spaces to not error on empty [] collection definitions
+    min-spaces-inside: 0
+    # Allow one space inside braces to improve code readability
+    max-spaces-inside: 1
+  colons:
+    # Allow multiple spaces after a colon to allow indentation of YAML
+    # dictionary values
+    max-spaces-after: -1
+  commas:
+    # Allow multiple spaces after a comma to allow indentation of YAML
+    # dictionary values
+    max-spaces-after: -1
+  indentation:
+    # Require 2 space indentation
+    spaces: 2
+    indent-sequences: consistent
+  truthy:
+    allowed-values: ['true', 'false']
+    check-keys: true
