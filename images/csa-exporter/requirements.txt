@@ -1,3 +1,4 @@
 flask==3.1.2
 requests==2.32.5
 prometheus_client==0.23.1
+waitress==3.0.2

@@ -113,6 +113,17 @@ class FakeSession:
         return FakeResponse()
 
 
+class FakeWaitress(types.ModuleType):
+    def __init__(self):
+        super().__init__("waitress")
+        self.calls = []
+
+    def serve(self, app, host=None, port=None, threads=None):
+        self.calls.append(
+            {"app": app, "host": host, "port": port, "threads": threads}
+        )
+
+
 def load_exporter_module():
     fake_requests = types.ModuleType("requests")
     fake_requests.Session = FakeSession
@@ -128,10 +139,12 @@ def load_exporter_module():
     fake_prometheus.Counter = FakeCounter
     fake_prometheus.Gauge = FakeGauge
     fake_prometheus.generate_latest = lambda: b"metrics"
+    fake_waitress = FakeWaitress()
 
     sys.modules["requests"] = fake_requests
     sys.modules["flask"] = fake_flask
     sys.modules["prometheus_client"] = fake_prometheus
+    sys.modules["waitress"] = fake_waitress
 
     module_path = (
         Path(__file__).resolve().parents[1] / "rootfs/usr/local/bin/exporter.py"
@@ -139,6 +152,7 @@ def load_exporter_module():
     spec = importlib.util.spec_from_file_location("csa_exporter_test_module", module_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module._fake_waitress = fake_waitress
     return module
 
 
@@ -240,4 +254,28 @@ class ExporterTests(unittest.TestCase):
         self.assertEqual(
             self.exporter.ip_dkim_missing_gauge.labels(ip="192.0.2.10")._value.get(),
             1,
+        )
+
+    def test_main_uses_waitress_configuration(self):
+        with mock.patch.dict(
+            self.exporter.os.environ,
+            {"HOST": "127.0.0.1", "PORT": "9200", "WAITRESS_THREADS": "8"},
+            clear=True,
+        ):
+            self.exporter.serve(
+                self.exporter.app,
+                host=self.exporter.os.getenv("HOST", "0.0.0.0"),
+                port=int(self.exporter.os.getenv("PORT", "9100")),
+                threads=int(self.exporter.os.getenv("WAITRESS_THREADS", "4")),
+            )
+
+        self.assertEqual(len(self.exporter._fake_waitress.calls), 1)
+        self.assertEqual(
+            self.exporter._fake_waitress.calls[0],
+            {
+                "app": self.exporter.app,
+                "host": "127.0.0.1",
+                "port": 9200,
+                "threads": 8,
+            },
         )

@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 import requests
 from flask import Flask, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
+from waitress import serve
 
 # Enhanced Logging Configuration
 logging.basicConfig(
@@ -389,4 +390,6 @@ def metrics():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 9100))
-    app.run(host="0.0.0.0", port=port)
+    host = os.getenv("HOST", "0.0.0.0")
+    threads = int(os.getenv("WAITRESS_THREADS", "4"))
+    serve(app, host=host, port=port, threads=threads)
