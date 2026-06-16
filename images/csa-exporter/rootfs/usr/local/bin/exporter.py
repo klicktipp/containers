@@ -75,7 +75,8 @@ def _load_timeout() -> int:
         timeout = int(raw_timeout)
     except ValueError:
         logger.warning(
-            "Invalid CSA_API_TIMEOUT value '%s', falling back to 10 seconds.", raw_timeout
+            "Invalid CSA_API_TIMEOUT value '%s', falling back to 10 seconds.",
+            raw_timeout,
         )
         return 10
 
@@ -90,9 +91,9 @@ def _load_timeout() -> int:
 
 
 # Configuration with Environment Variables
-API_URL = os.getenv("CSA_API_URL", "https://monitor.certified-senders.org/api/v1").rstrip(
-    "/"
-)
+API_URL = os.getenv(
+    "CSA_API_URL", "https://monitor.certified-senders.org/api/v1"
+).rstrip("/")
 API_TOKEN = os.getenv("CSA_API_TOKEN", "").strip()
 API_ID = os.getenv("CSA_API_ID", "").strip()
 API_SECRET = os.getenv("CSA_API_SECRET", "").strip()
@@ -141,7 +142,9 @@ def _normalize_date(raw_date: str) -> Optional[str]:
     return candidate
 
 
-def _request_api(path: str, params: Optional[Dict[str, str]] = None) -> Optional[requests.Response]:
+def _request_api(
+    path: str, params: Optional[Dict[str, str]] = None
+) -> Optional[requests.Response]:
     """Make a GET request against the CSA API and record telemetry."""
 
     url = f"{API_URL}{path}"
@@ -251,9 +254,7 @@ def fetch_kpi_dkim_metrics(date_str: Optional[str]) -> None:
         dkim_aligned_mails_gauge.labels(domain=domain).set(
             _to_int(metric.get("aligned"))
         )
-        dkim_errors_gauge.labels(domain=domain).set(
-            _to_int(metric.get("dkim_errors"))
-        )
+        dkim_errors_gauge.labels(domain=domain).set(_to_int(metric.get("dkim_errors")))
         dkim_non_aligned_gauge.labels(domain=domain).set(
             _to_int(metric.get("non_aligned"))
         )
@@ -317,7 +318,11 @@ def fetch_inbox_placement_deviation(date_str: Optional[str]) -> None:
     """Fetch and update inbox placement deviation metric for a specific date."""
 
     _set_deviation_metric(
-        "/stat/anomaly/iprdeviation", date_str, "IPR deviation", ipr_deviation_gauge, "iprdev"
+        "/stat/anomaly/iprdeviation",
+        date_str,
+        "IPR deviation",
+        ipr_deviation_gauge,
+        "iprdev",
     )
 
 

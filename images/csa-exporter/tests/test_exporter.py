@@ -119,9 +119,7 @@ class FakeWaitress(types.ModuleType):
         self.calls = []
 
     def serve(self, app, host=None, port=None, threads=None):
-        self.calls.append(
-            {"app": app, "host": host, "port": port, "threads": threads}
-        )
+        self.calls.append({"app": app, "host": host, "port": port, "threads": threads})
 
 
 def load_exporter_module():
@@ -149,7 +147,9 @@ def load_exporter_module():
     module_path = (
         Path(__file__).resolve().parents[1] / "rootfs/usr/local/bin/exporter.py"
     )
-    spec = importlib.util.spec_from_file_location("csa_exporter_test_module", module_path)
+    spec = importlib.util.spec_from_file_location(
+        "csa_exporter_test_module", module_path
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module._fake_waitress = fake_waitress
@@ -178,9 +178,13 @@ class ExporterTests(unittest.TestCase):
             {"CSA_API_TOKEN": "abc", "CSA_API_ID": "name", "CSA_API_SECRET": "secret"},
             clear=True,
         ):
-            self.exporter.API_TOKEN = self.exporter.os.getenv("CSA_API_TOKEN", "").strip()
+            self.exporter.API_TOKEN = self.exporter.os.getenv(
+                "CSA_API_TOKEN", ""
+            ).strip()
             self.exporter.API_ID = self.exporter.os.getenv("CSA_API_ID", "").strip()
-            self.exporter.API_SECRET = self.exporter.os.getenv("CSA_API_SECRET", "").strip()
+            self.exporter.API_SECRET = self.exporter.os.getenv(
+                "CSA_API_SECRET", ""
+            ).strip()
             self.assertEqual(self.exporter._build_authorization_header(), "ApiKey abc")
 
     def test_build_authorization_header_uses_base64_name_and_key(self):
@@ -189,11 +193,17 @@ class ExporterTests(unittest.TestCase):
             {"CSA_API_ID": "name", "CSA_API_SECRET": "secret"},
             clear=True,
         ):
-            self.exporter.API_TOKEN = self.exporter.os.getenv("CSA_API_TOKEN", "").strip()
+            self.exporter.API_TOKEN = self.exporter.os.getenv(
+                "CSA_API_TOKEN", ""
+            ).strip()
             self.exporter.API_ID = self.exporter.os.getenv("CSA_API_ID", "").strip()
-            self.exporter.API_SECRET = self.exporter.os.getenv("CSA_API_SECRET", "").strip()
+            self.exporter.API_SECRET = self.exporter.os.getenv(
+                "CSA_API_SECRET", ""
+            ).strip()
             expected = b64encode(b"name:secret").decode("ascii")
-            self.assertEqual(self.exporter._build_authorization_header(), f"ApiKey {expected}")
+            self.assertEqual(
+                self.exporter._build_authorization_header(), f"ApiKey {expected}"
+            )
 
     def test_normalize_date_rejects_invalid_input(self):
         self.assertEqual(self.exporter._normalize_date(' "2026-06-15" '), "2026-06-15")
@@ -234,9 +244,13 @@ class ExporterTests(unittest.TestCase):
         def fake_request(path, params=None):
             del params
             if path in json_by_path:
-                return FakeResponse(json_data=json_by_path[path], url=f"https://example.invalid{path}")
+                return FakeResponse(
+                    json_data=json_by_path[path], url=f"https://example.invalid{path}"
+                )
             if path in text_by_path:
-                return FakeResponse(text=text_by_path[path], url=f"https://example.invalid{path}")
+                return FakeResponse(
+                    text=text_by_path[path], url=f"https://example.invalid{path}"
+                )
             self.fail(f"unexpected path {path}")
 
         with mock.patch.object(self.exporter, "_request_api", side_effect=fake_request):
@@ -248,7 +262,9 @@ class ExporterTests(unittest.TestCase):
         self.assertEqual(self.exporter.ipr_deviation_gauge._value.get(), 1.5)
         self.assertEqual(self.exporter.scr_deviation_gauge._value.get(), 0.75)
         self.assertEqual(
-            self.exporter.dkim_aligned_mails_gauge.labels(domain="example.com")._value.get(),
+            self.exporter.dkim_aligned_mails_gauge.labels(
+                domain="example.com"
+            )._value.get(),
             12,
         )
         self.assertEqual(
