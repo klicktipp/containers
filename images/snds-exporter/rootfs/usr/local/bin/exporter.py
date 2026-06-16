@@ -5,9 +5,12 @@ import json
 import logging
 import os
 import re
+import base64
+import stat
 import threading
 import time
 from io import StringIO
+from tempfile import NamedTemporaryFile
 from typing import Optional
 from urllib.parse import quote
 
@@ -77,6 +80,10 @@ fetch_parse_error_gauge = Gauge(
 )
 
 # Configuration sourced from environment
+AUTHORITY = "https://login.microsoftonline.com/consumers/oauth2/v2.0"
+TOKEN_ENDPOINT = f"{AUTHORITY}/token"
+CLIENT_ID = "a53a6cc1-a1cd-46f7-a4aa-281cdabec33c"
+SNDS_SCOPE = "a53a6cc1-a1cd-46f7-a4aa-281cdabec33c/.default"
 REST_API_URL = os.getenv(
     "REST_API_URL",
     "https://substrate.office.com/ip-domain-management-snds/api/report/data",
@@ -90,6 +97,29 @@ REST_API_IP = os.getenv("REST_API_IP", "").strip()
 REST_API_LOOKBACK_DAYS = max(1, int(os.getenv("REST_API_LOOKBACK_DAYS", "3")))
 SNDS_ACCESS_TOKEN = os.getenv("SNDS_ACCESS_TOKEN", "")
 SNDS_ACCESS_TOKEN_FILE = os.getenv("SNDS_ACCESS_TOKEN_FILE", "")
+SNDS_TOKEN_CACHE_FILE = os.getenv("SNDS_TOKEN_CACHE_FILE", "")
+TOKEN_REFRESH_BEFORE_SECONDS = max(
+    30, int(os.getenv("TOKEN_REFRESH_BEFORE_SECONDS", "600"))
+)
+K8S_SECRET_NAME = os.getenv("K8S_SECRET_NAME", "").strip()
+K8S_SECRET_NAMESPACE = os.getenv("K8S_SECRET_NAMESPACE", "").strip()
+K8S_SECRET_ACCESS_TOKEN_KEY = os.getenv(
+    "K8S_SECRET_ACCESS_TOKEN_KEY", "access-token"
+).strip()
+K8S_SECRET_CACHE_KEY = os.getenv("K8S_SECRET_CACHE_KEY", "token-cache.json").strip()
+K8S_API_URL = os.getenv("K8S_API_URL", "https://kubernetes.default.svc").rstrip("/")
+K8S_SERVICE_ACCOUNT_TOKEN_FILE = os.getenv(
+    "K8S_SERVICE_ACCOUNT_TOKEN_FILE",
+    "/var/run/secrets/kubernetes.io/serviceaccount/token",
+)
+K8S_SERVICE_ACCOUNT_CA_FILE = os.getenv(
+    "K8S_SERVICE_ACCOUNT_CA_FILE",
+    "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+)
+K8S_NAMESPACE_FILE = os.getenv(
+    "K8S_NAMESPACE_FILE",
+    "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
+)
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "10"))
 CACHE_SECONDS = int(os.getenv("CACHE_SECONDS", "300"))
 VERIFY_TLS = os.getenv("VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
@@ -126,8 +156,13 @@ FIELD_ALIASES = {
 _session = requests.Session()
 _session.headers.update({"User-Agent": USER_AGENT})
 _lock = threading.Lock()
+_auth_lock = threading.Lock()
 _last_fetch_epoch = 0.0
 _last_fetch_success = False
+_access_token_cache = SNDS_ACCESS_TOKEN.strip()
+_access_token_expires_at: Optional[int] = None
+_refresh_token_cache = ""
+_auth_state_loaded = False
 
 
 def _default_token_file_path() -> str:
@@ -137,6 +172,231 @@ def _default_token_file_path() -> str:
     return os.path.join(
         os.path.expanduser("~"), ".local", "state", "snds-exporter", "access-token"
     )
+
+
+def _default_token_cache_file_path() -> str:
+    xdg_cache_home = os.getenv("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        return os.path.join(xdg_cache_home, "snds-exporter", "token-cache.json")
+    return os.path.join(
+        os.path.expanduser("~"), ".cache", "snds-exporter", "token-cache.json"
+    )
+
+
+def _write_secure_text(path: str, content: str) -> None:
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=directory or ".",
+        delete=False,
+    ) as temp_file:
+        temp_file.write(content)
+        temp_path = temp_file.name
+    os.chmod(temp_path, stat.S_IRUSR | stat.S_IWUSR)
+    os.replace(temp_path, path)
+
+
+def _path_is_writable(path: str) -> bool:
+    if os.path.exists(path):
+        return os.access(path, os.W_OK)
+    parent = os.path.dirname(path) or "."
+    return os.access(parent, os.W_OK)
+
+
+def _token_cache_payload(expires_at: int, refresh_token: str) -> dict:
+    return {
+        "access_token_expires_at": expires_at,
+        "refresh_token": refresh_token,
+    }
+
+
+def _load_token_cache() -> dict:
+    cache_file_path = SNDS_TOKEN_CACHE_FILE or _default_token_cache_file_path()
+    if not cache_file_path or not os.path.exists(cache_file_path):
+        return {}
+    with open(cache_file_path, encoding="utf-8") as cache_file:
+        return json.load(cache_file)
+
+
+def _token_expiry_epoch(result: dict) -> int:
+    expires_on = result.get("expires_on")
+    if expires_on:
+        return int(expires_on)
+    expires_in = result.get("expires_in")
+    if expires_in:
+        return int(time.time()) + int(expires_in)
+    raise RuntimeError("Microsoft token response did not include an expiry time.")
+
+
+def _token_error(result: dict | None) -> str:
+    if not result:
+        return "No token result returned."
+    error = result.get("error")
+    description = result.get("error_description")
+    if error or description:
+        return f"{error or 'token_error'}: {description or 'no description'}"
+    return "Unknown token acquisition failure."
+
+
+def _load_auth_state() -> None:
+    global _access_token_cache, _access_token_expires_at, _refresh_token_cache, _auth_state_loaded
+    if _auth_state_loaded:
+        return
+
+    _access_token_cache = SNDS_ACCESS_TOKEN.strip()
+    _access_token_expires_at = None
+    _refresh_token_cache = ""
+    token_file_path = SNDS_ACCESS_TOKEN_FILE or _default_token_file_path()
+    if token_file_path and os.path.exists(token_file_path):
+        with open(token_file_path, encoding="utf-8") as token_file:
+            _access_token_cache = token_file.read().strip()
+
+    cache_payload = _load_token_cache()
+    expires_at = cache_payload.get("access_token_expires_at")
+    _access_token_expires_at = int(expires_at) if expires_at else None
+    _refresh_token_cache = cache_payload.get("refresh_token", "").strip()
+    _auth_state_loaded = True
+
+
+def _store_auth_state(
+    access_token: str,
+    expires_at: int,
+    refresh_token: str,
+) -> None:
+    global _access_token_cache, _access_token_expires_at, _refresh_token_cache, _auth_state_loaded
+    _access_token_cache = access_token.strip()
+    _access_token_expires_at = expires_at
+    _refresh_token_cache = refresh_token.strip()
+    _auth_state_loaded = True
+
+
+def _service_account_namespace() -> str:
+    if K8S_SECRET_NAMESPACE:
+        return K8S_SECRET_NAMESPACE
+    if os.path.exists(K8S_NAMESPACE_FILE):
+        with open(K8S_NAMESPACE_FILE, encoding="utf-8") as namespace_file:
+            return namespace_file.read().strip()
+    return ""
+
+
+def _persist_auth_state(
+    access_token: str,
+    expires_at: int,
+    refresh_token: str,
+) -> None:
+    token_file_path = SNDS_ACCESS_TOKEN_FILE or _default_token_file_path()
+    cache_file_path = SNDS_TOKEN_CACHE_FILE or _default_token_cache_file_path()
+    cache_payload = _token_cache_payload(expires_at, refresh_token)
+
+    if token_file_path and _path_is_writable(token_file_path):
+        _write_secure_text(token_file_path, access_token + "\n")
+    if cache_file_path and _path_is_writable(cache_file_path):
+        _write_secure_text(
+            cache_file_path,
+            json.dumps(cache_payload, indent=2, sort_keys=True) + "\n",
+        )
+
+    if not K8S_SECRET_NAME:
+        return
+
+    namespace = _service_account_namespace()
+    if not namespace:
+        logger.warning(
+            "SNDS token refresh succeeded, but Kubernetes secret update is disabled because no namespace was found."
+        )
+        return
+    if not os.path.exists(K8S_SERVICE_ACCOUNT_TOKEN_FILE):
+        logger.warning(
+            "SNDS token refresh succeeded, but Kubernetes secret update is disabled because the service account token file is missing."
+        )
+        return
+
+    with open(K8S_SERVICE_ACCOUNT_TOKEN_FILE, encoding="utf-8") as token_file:
+        service_account_token = token_file.read().strip()
+
+    patch_payload = {
+        "data": {
+            K8S_SECRET_ACCESS_TOKEN_KEY: base64.b64encode(
+                (access_token + "\n").encode("utf-8")
+            ).decode("ascii"),
+            K8S_SECRET_CACHE_KEY: base64.b64encode(
+                (json.dumps(cache_payload, indent=2, sort_keys=True) + "\n").encode(
+                    "utf-8"
+                )
+            ).decode("ascii"),
+        }
+    }
+    verify_value: bool | str = (
+        K8S_SERVICE_ACCOUNT_CA_FILE if os.path.exists(K8S_SERVICE_ACCOUNT_CA_FILE) else True
+    )
+    try:
+        response = requests.patch(
+            f"{K8S_API_URL}/api/v1/namespaces/{namespace}/secrets/{K8S_SECRET_NAME}",
+            headers={
+                "Authorization": f"Bearer {service_account_token}",
+                "Content-Type": "application/merge-patch+json",
+            },
+            data=json.dumps(patch_payload),
+            timeout=30,
+            verify=verify_value,
+        )
+        response.raise_for_status()
+        logger.info(
+            "Updated Kubernetes secret %s/%s with refreshed SNDS token state.",
+            namespace,
+            K8S_SECRET_NAME,
+        )
+    except Exception as exc:
+        logger.warning(
+            "SNDS token refresh succeeded, but updating Kubernetes secret %s/%s failed: %s",
+            namespace,
+            K8S_SECRET_NAME,
+            exc,
+        )
+
+
+def _refresh_access_token(force: bool = False) -> str:
+    with _auth_lock:
+        _load_auth_state()
+        now = int(time.time())
+        if (
+            not force
+            and _access_token_cache
+            and _access_token_expires_at is not None
+            and now < _access_token_expires_at - TOKEN_REFRESH_BEFORE_SECONDS
+        ):
+            return _access_token_cache
+        if not force and _access_token_cache and not _refresh_token_cache:
+            return _access_token_cache
+        if not _refresh_token_cache:
+            raise RuntimeError(
+                "No refresh token is available for headless SNDS token renewal. Human intervention is required."
+            )
+
+        logger.info("Refreshing SNDS access token using cached refresh token.")
+        response = requests.post(
+            TOKEN_ENDPOINT,
+            data={
+                "client_id": CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": _refresh_token_cache,
+                "scope": SNDS_SCOPE,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if "access_token" not in result:
+            raise RuntimeError(_token_error(result))
+        access_token = result["access_token"].strip()
+        expires_at = _token_expiry_epoch(result)
+        refresh_token = result.get("refresh_token", "").strip() or _refresh_token_cache
+        _store_auth_state(access_token, expires_at, refresh_token)
+        _persist_auth_state(access_token, expires_at, refresh_token)
+        return access_token
 
 
 def _normalize_column_name(value: str) -> str:
@@ -218,11 +478,13 @@ def _parse_complaint_rate(value: str) -> Optional[float]:
 
 
 def _load_access_token() -> str:
-    token_file_path = SNDS_ACCESS_TOKEN_FILE or _default_token_file_path()
-    if token_file_path and os.path.exists(token_file_path):
-        with open(token_file_path, encoding="utf-8") as token_file:
-            return token_file.read().strip()
-    return SNDS_ACCESS_TOKEN.strip()
+    _load_auth_state()
+    return _access_token_cache
+
+
+def _has_auth_material() -> bool:
+    _load_auth_state()
+    return bool(_access_token_cache or _refresh_token_cache)
 
 
 def _default_rest_api_date() -> str:
@@ -243,11 +505,7 @@ def _build_request(
     rest_api_date: Optional[str] = None,
     rest_api_ip: Optional[str] = None,
 ) -> tuple[str, dict[str, str], dict[str, str]]:
-    access_token = _load_access_token()
-    if not access_token:
-        raise ValueError(
-            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
-        )
+    access_token = _refresh_access_token()
 
     selected_date = (REST_API_DATE if rest_api_date is None else rest_api_date).strip()
     selected_ip = (REST_API_IP if rest_api_ip is None else rest_api_ip).strip()
@@ -269,11 +527,7 @@ def _build_rest_request_candidates(
     rest_api_date: Optional[str] = None,
     rest_api_ip: Optional[str] = None,
 ) -> list[tuple[str, dict[str, str], dict[str, str]]]:
-    access_token = _load_access_token()
-    if not access_token:
-        raise ValueError(
-            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
-        )
+    access_token = _refresh_access_token()
 
     selected_date = (REST_API_DATE if rest_api_date is None else rest_api_date).strip()
     selected_ip = (REST_API_IP if rest_api_ip is None else rest_api_ip).strip()
@@ -292,9 +546,7 @@ def _build_rest_request_candidates(
 
 
 def _build_status_request() -> tuple[str, dict[str, str], dict[str, str]]:
-    access_token = _load_access_token()
-    if not access_token:
-        raise ValueError("SNDS IP status report requires an access token.")
+    access_token = _refresh_access_token()
     return STATUS_API_URL.rstrip("/"), {}, {"Authorization": f"Bearer {access_token}"}
 
 
@@ -331,6 +583,28 @@ def _request_with_rest_fallback(
             logger.info("SNDS REST API succeeded after retrying with trailing slash.")
             return retry_response
         response = retry_response
+    return response
+
+
+def _request_with_auth_refresh(
+    data_url: str,
+    request_params: dict[str, str],
+    request_headers: dict[str, str],
+) -> requests.Response:
+    response = _request_with_rest_fallback(
+        data_url,
+        request_params,
+        request_headers,
+    )
+    if response.status_code == 401 and request_headers.get("Authorization"):
+        logger.warning("SNDS access token was rejected; attempting an immediate refresh.")
+        refreshed_headers = dict(request_headers)
+        refreshed_headers["Authorization"] = f"Bearer {_refresh_access_token(force=True)}"
+        response = _request_with_rest_fallback(
+            data_url,
+            request_params,
+            refreshed_headers,
+        )
     return response
 
 
@@ -956,9 +1230,9 @@ def fetch_snds_data(
     global _last_fetch_epoch, _last_fetch_success
     manual_rest_override = rest_api_date is not None or rest_api_ip is not None
 
-    if not _load_access_token():
+    if not _has_auth_material():
         logger.error(
-            "No SNDS REST API access token is configured. Set SNDS_ACCESS_TOKEN or SNDS_ACCESS_TOKEN_FILE."
+            "No SNDS REST API token state is configured. Provide an access token and refresh-token cache from the initial login."
         )
         fetch_success_gauge.set(0)
         return
@@ -992,7 +1266,7 @@ def fetch_snds_data(
             response = None
             last_exc = None
             for data_url, request_params, request_headers in request_candidates:
-                response = _request_with_rest_fallback(
+                response = _request_with_auth_refresh(
                     data_url,
                     request_params,
                     request_headers,
@@ -1021,16 +1295,15 @@ def fetch_snds_data(
             _validate_response(response)
             processed_rows = _update_gauges(response.text)
             processed_status_rows = 0
-            if _load_access_token():
-                status_url, status_params, status_headers = _build_status_request()
-                status_response = _request_with_rest_fallback(
-                    status_url,
-                    status_params,
-                    status_headers,
-                )
-                status_response.raise_for_status()
-                _validate_response(status_response)
-                processed_status_rows = _update_ip_status_gauges(status_response.text)
+            status_url, status_params, status_headers = _build_status_request()
+            status_response = _request_with_auth_refresh(
+                status_url,
+                status_params,
+                status_headers,
+            )
+            status_response.raise_for_status()
+            _validate_response(status_response)
+            processed_status_rows = _update_ip_status_gauges(status_response.text)
             fetch_parse_error_gauge.set(0)
         except requests.RequestException as exc:
             if (

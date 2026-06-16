@@ -2,7 +2,7 @@
 
 `snds-exporter` is a small Prometheus exporter for Microsoft Smart Network Data Services (SNDS).
 
-It fetches report data from the SNDS REST API, converts the response into Prometheus gauges, and exposes them on port `9100`.
+It fetches report data from the SNDS REST API, renews the OAuth access token headlessly when a cached refresh token is available, converts the response into Prometheus gauges, and exposes them on port `9100`.
 
 ## Repository Fit
 
@@ -16,8 +16,10 @@ The image metadata and version tags are derived from `Dockerfile`.
 
 - `SNDS_ACCESS_TOKEN`: OAuth bearer token for the SNDS REST API.
 - `SNDS_ACCESS_TOKEN_FILE`: Path to a file containing the OAuth bearer token for the SNDS REST API.
+- `SNDS_TOKEN_CACHE_FILE`: Path to a JSON file containing the cached refresh token and access token expiry. If unset, the exporter uses `~/.cache/snds-exporter/token-cache.json`.
 
 If `SNDS_ACCESS_TOKEN_FILE` is unset, the exporter automatically looks for the helper's default token file at `~/.local/state/snds-exporter/access-token`.
+For headless renewal, the exporter needs both the current access token and the refresh-token cache created by the initial login.
 
 ### Optional Configuration
 
@@ -26,23 +28,29 @@ If `SNDS_ACCESS_TOKEN_FILE` is unset, the exporter automatically looks for the h
 - `REST_API_DATE`: Optional SNDS REST report date in `YYYY-MM-DD` format. Appended as `/REST_API_DATE`. If unset, the exporter starts with yesterday's date in UTC and automatically looks back a few days if Microsoft has not published that report yet.
 - `REST_API_IP`: Optional SNDS REST IPv4 filter. Appended after `REST_API_DATE` as `/REST_API_IP`.
 - `REST_API_LOOKBACK_DAYS`: Number of UTC dates to try when `REST_API_DATE` is unset. Default: `3`
+- `TOKEN_REFRESH_BEFORE_SECONDS`: Renew the SNDS access token this many seconds before its cached expiry. Default: `600`
+- `K8S_SECRET_NAME`: Optional Kubernetes secret name to patch after a successful token refresh.
+- `K8S_SECRET_NAMESPACE`: Optional Kubernetes namespace for `K8S_SECRET_NAME`. If unset, the exporter uses the in-cluster service-account namespace file.
+- `K8S_SECRET_ACCESS_TOKEN_KEY`: Secret key for the access token. Default: `access-token`
+- `K8S_SECRET_CACHE_KEY`: Secret key for the refresh-token cache JSON. Default: `token-cache.json`
+- `K8S_API_URL`: Kubernetes API base URL. Default: `https://kubernetes.default.svc`
 - `REQUEST_TIMEOUT`: HTTP timeout in seconds. Default: `10`
 - `CACHE_SECONDS`: Cache duration before the next upstream fetch. Default: `300`
 - `VERIFY_TLS`: Enable or disable TLS verification. Default: `true`
 - `USER_AGENT`: HTTP user agent. Default: `kt-snds-exporter/1.0`
 - `DEBUG_UNKNOWN_RESPONSES`: Log a small debug sample when parsing fails. Default: `false`
 
-The exporter does not perform the interactive OAuth authorization code flow itself. Obtain and refresh the SNDS bearer token outside the container, then inject it through `SNDS_ACCESS_TOKEN` or `SNDS_ACCESS_TOKEN_FILE`.
+The exporter does not perform the interactive OAuth authorization code flow itself. Do the initial login once, provide the resulting access token and refresh-token cache to the pod, and then let the exporter handle silent refresh attempts on demand.
 
 For manual REST endpoint checks without changing environment variables, call `/metrics` with query parameters such as `?date=2026-12-31` or `?date=2026-12-31&ip=192.0.2.4`. Query parameters override `REST_API_DATE` and `REST_API_IP` for that request and bypass the cache.
 
 When REST authentication is used, the exporter fetches both the dated data report and the separate IP status report. The data report populates `snds_overall_status_info`; the IP status report populates range-based metrics such as `snds_ip_status_blocked` and `snds_ip_status_reason_info`.
 
-## Token Helper
+## Initial Login
 
-Microsoft's legacy SNDS links can expire. The recommended setup for the exporter is therefore the REST API plus a host-side token refresher.
+Microsoft's legacy SNDS links can expire. The recommended setup for the exporter is therefore the REST API plus an initial OAuth login that seeds the access token and refresh-token cache.
 
-The repository includes a helper script at `rootfs/usr/local/bin/snds_token_helper.py`. The built image contains it at `/usr/local/bin/snds_token_helper.py`. It performs the SNDS OAuth flow directly, requests the `offline_access` scope during the initial login, stores the returned refresh token in a local cache file, writes the current bearer token to a local file, and can keep refreshing it before expiry.
+The repository includes a helper script at `rootfs/usr/local/bin/snds_token_helper.py`. The built image contains it at `/usr/local/bin/snds_token_helper.py`. It performs the SNDS OAuth flow directly, requests the `offline_access` scope during the initial login, stores the returned refresh token in a local cache file, and writes the current bearer token to a local file.
 
 Install the helper dependencies on the host:
 
@@ -58,23 +66,10 @@ python3 rootfs/usr/local/bin/snds_token_helper.py
 
 The helper prints a Microsoft login URL. Open it in your local browser, complete the login, then copy the final redirect URL from the browser address bar and paste it back into the terminal. The browser may show a connection error on `http://localhost`; that is expected for this manual flow.
 
-Keep the token fresh in the background:
-
-```sh
-python3 rootfs/usr/local/bin/snds_token_helper.py --watch
-```
-
 Inside the image, the equivalent commands are:
 
 ```sh
 python3 /usr/local/bin/snds_token_helper.py
-python3 /usr/local/bin/snds_token_helper.py --watch
-```
-
-For unattended refresh jobs, use `--non-interactive` so the helper fails cleanly instead of waiting for pasted browser output:
-
-```sh
-python3 /usr/local/bin/snds_token_helper.py --watch --non-interactive
 ```
 
 By default, the helper stores:
@@ -82,17 +77,21 @@ By default, the helper stores:
 - the current access token in `~/.local/state/snds-exporter/access-token`
 - the refresh token cache in `~/.cache/snds-exporter/token-cache.json`
 
-Point the container at the token file:
+Provide both files to the exporter container:
 
 ```sh
 docker run --rm \
   -p 9100:9100 \
   -e SNDS_ACCESS_TOKEN_FILE=/run/secrets/snds-access-token \
+  -e SNDS_TOKEN_CACHE_FILE=/run/secrets/snds-token-cache.json \
   -v "$HOME/.local/state/snds-exporter/access-token:/run/secrets/snds-access-token:ro" \
+  -v "$HOME/.cache/snds-exporter/token-cache.json:/run/secrets/snds-token-cache.json:ro" \
   local/snds-exporter:latest
 ```
 
-If the cache can no longer refresh silently, the helper will require another interactive Microsoft login. In `--watch --non-interactive` mode, it fails cleanly so your job logs and alerts can detect the problem.
+If silent refresh stops working, the exporter logs the failure to stdout and keeps requiring human intervention for a fresh initial login.
+
+In Kubernetes, mount both files from a Secret. If you want refreshed token state to survive pod restarts and be shared across replicas, set `K8S_SECRET_NAME` and let the exporter patch that Secret after a successful refresh.
 
 ## Exposed Endpoints
 

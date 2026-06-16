@@ -53,6 +53,7 @@ class FakeResponse:
         status_code=200,
         ok=True,
         mimetype=None,
+        json_data=None,
         **_kwargs,
     ):
         self.text = body
@@ -60,10 +61,18 @@ class FakeResponse:
         self.status_code = status_code
         self.ok = ok
         self.mimetype = mimetype
+        self._json_data = json_data
 
     def raise_for_status(self):
         if not self.ok or self.status_code >= 400:
             raise Exception(f"{self.status_code} error")
+
+    def json(self):
+        if self._json_data is not None:
+            return self._json_data
+        if self.text:
+            return {"text": self.text}
+        return {}
 
 
 class FakeSession:
@@ -92,6 +101,8 @@ def load_exporter_module():
     fake_requests.Session = FakeSession
     fake_requests.RequestException = Exception
     fake_requests.Response = FakeResponse
+    fake_requests.post = lambda *args, **kwargs: FakeResponse()
+    fake_requests.patch = lambda *args, **kwargs: FakeResponse()
 
     fake_flask = types.ModuleType("flask")
     fake_flask.Flask = FakeFlask
@@ -125,6 +136,10 @@ EXPORTER = load_exporter_module()
 
 class ExporterTests(unittest.TestCase):
     def setUp(self):
+        EXPORTER._auth_state_loaded = False
+        EXPORTER._access_token_cache = ""
+        EXPORTER._access_token_expires_at = None
+        EXPORTER._refresh_token_cache = ""
         EXPORTER._update_gauges(
             "Ip Address,Activity period,RCPT commands,DATA commands,Message recipients,"
             "Filter result,Complaint rate,Trap message period,Trap hits,JMR P1 Sender,Comments\n"
@@ -247,6 +262,42 @@ class ExporterTests(unittest.TestCase):
             ],
             1,
         )
+
+    def test_refresh_access_token_uses_cached_refresh_token(self):
+        original_cache_file = EXPORTER.SNDS_TOKEN_CACHE_FILE
+        original_token_file = EXPORTER.SNDS_ACCESS_TOKEN_FILE
+        original_post = EXPORTER.requests.post
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                cache_path = Path(temp_dir) / "token-cache.json"
+                token_path = Path(temp_dir) / "access-token"
+                cache_path.write_text(
+                    '{"access_token_expires_at": 1, "refresh_token": "refresh-value"}',
+                    encoding="utf-8",
+                )
+                EXPORTER.SNDS_TOKEN_CACHE_FILE = str(cache_path)
+                EXPORTER.SNDS_ACCESS_TOKEN_FILE = str(token_path)
+
+                def fake_post(*_args, **_kwargs):
+                    return FakeResponse(
+                        json_data={
+                            "access_token": "renewed-token",
+                            "refresh_token": "refresh-value-2",
+                            "expires_in": 3600,
+                        }
+                    )
+
+                EXPORTER.requests.post = fake_post
+
+                token = EXPORTER._refresh_access_token()
+
+                self.assertEqual(token, "renewed-token")
+                self.assertEqual(token_path.read_text(encoding="utf-8").strip(), "renewed-token")
+                self.assertIn("refresh-value-2", cache_path.read_text(encoding="utf-8"))
+        finally:
+            EXPORTER.SNDS_TOKEN_CACHE_FILE = original_cache_file
+            EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
+            EXPORTER.requests.post = original_post
 
     def test_normalize_column_name_handles_camel_case(self):
         self.assertEqual(EXPORTER._normalize_column_name("ipAddress"), "ip address")
