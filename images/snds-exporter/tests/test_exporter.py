@@ -595,7 +595,7 @@ class ExporterTests(unittest.TestCase):
             EXPORTER.SNDS_ACCESS_TOKEN = original_token
             EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file
 
-    def test_healthz_returns_503_after_failed_fetch(self):
+    def test_healthz_stays_ready_after_failed_fetch(self):
         original_token = EXPORTER.SNDS_ACCESS_TOKEN
         original_token_file = EXPORTER.SNDS_ACCESS_TOKEN_FILE
         try:
@@ -607,7 +607,7 @@ class ExporterTests(unittest.TestCase):
             body, status = EXPORTER.healthz()
 
             self.assertEqual(body, "SNDS data not yet available")
-            self.assertEqual(status, 503)
+            self.assertEqual(status, 200)
         finally:
             EXPORTER.SNDS_ACCESS_TOKEN = original_token
             EXPORTER.SNDS_ACCESS_TOKEN_FILE = original_token_file

@@ -127,7 +127,7 @@ The restart is documented here as the reliable path. Kubernetes updates mounted 
 ## Exposed Endpoints
 
 - `/metrics`: Prometheus metrics endpoint
-- `/healthz`: Returns `200` while the process is healthy, including bootstrap before the first successful SNDS fetch
+- `/healthz`: Returns `200` while the process is healthy. Upstream SNDS fetch failures remain visible via exporter metrics and log output, but do not make the pod unready.
 - `/livez`: Basic liveness endpoint
 
 ## Local Validation

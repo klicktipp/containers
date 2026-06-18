@@ -1390,12 +1390,8 @@ def fetch_snds_data(
 
 @app.route("/healthz")
 def healthz():
-    if not _has_auth_material():
-        return "OK", 200
-    if _last_fetch_epoch == 0:
-        return "OK", 200
-    if not _last_fetch_success:
-        return "SNDS data not yet available", 503
+    if _has_auth_material() and _last_fetch_epoch > 0 and not _last_fetch_success:
+        return "SNDS data not yet available", 200
     return "OK", 200
 
 
