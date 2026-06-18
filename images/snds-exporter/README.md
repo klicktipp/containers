@@ -35,6 +35,8 @@ For headless renewal, the exporter needs both the current access token and the r
 - `K8S_SECRET_CACHE_KEY`: Secret key for the refresh-token cache JSON. Default: `token-cache.json`
 - `K8S_API_URL`: Kubernetes API base URL. Default: `https://kubernetes.default.svc`
 - `REQUEST_TIMEOUT`: HTTP timeout in seconds. Default: `10`
+- `REQUEST_RETRY_ATTEMPTS`: Number of attempts for transient SNDS transport errors such as connection resets. Default: `3`
+- `REQUEST_RETRY_BACKOFF_SECONDS`: Linear backoff base in seconds between retry attempts. Default: `1`
 - `CACHE_SECONDS`: Cache duration before the next upstream fetch. Default: `300`
 - `VERIFY_TLS`: Enable or disable TLS verification. Default: `true`
 - `USER_AGENT`: HTTP user agent. Default: `kt-snds-exporter/1.0`

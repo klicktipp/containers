@@ -92,7 +92,10 @@ class FakeSession:
             }
         )
         if self.responses:
-            return self.responses.pop(0)
+            response = self.responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return response
         return FakeResponse()
 
 
@@ -486,6 +489,58 @@ class ExporterTests(unittest.TestCase):
             ],
         )
         self.assertEqual(response.status_code, 200)
+
+    def test_request_with_rest_fallback_retries_transport_errors(self):
+        original_retry_attempts = EXPORTER.REQUEST_RETRY_ATTEMPTS
+        original_backoff = EXPORTER.REQUEST_RETRY_BACKOFF_SECONDS
+        try:
+            EXPORTER.REQUEST_RETRY_ATTEMPTS = 3
+            EXPORTER.REQUEST_RETRY_BACKOFF_SECONDS = 0
+            EXPORTER._session.responses = [
+                EXPORTER.requests.RequestException("connection reset by peer"),
+                FakeResponse(
+                    body='[{"ipAddress":"192.0.2.10","dataCommands":1,"filterResult":"GREEN"}]'
+                ),
+            ]
+
+            response = EXPORTER._request_with_rest_fallback(
+                "https://substrate.office.com/ip-domain-management-snds/api/report/data/2026-06-09",
+                {},
+                {"Authorization": "Bearer token"},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                [call["url"] for call in EXPORTER._session.calls[-2:]],
+                [
+                    "https://substrate.office.com/ip-domain-management-snds/api/report/data/2026-06-09",
+                    "https://substrate.office.com/ip-domain-management-snds/api/report/data/2026-06-09",
+                ],
+            )
+        finally:
+            EXPORTER.REQUEST_RETRY_ATTEMPTS = original_retry_attempts
+            EXPORTER.REQUEST_RETRY_BACKOFF_SECONDS = original_backoff
+
+    def test_request_with_rest_fallback_raises_after_transport_retries_exhausted(self):
+        original_retry_attempts = EXPORTER.REQUEST_RETRY_ATTEMPTS
+        original_backoff = EXPORTER.REQUEST_RETRY_BACKOFF_SECONDS
+        try:
+            EXPORTER.REQUEST_RETRY_ATTEMPTS = 2
+            EXPORTER.REQUEST_RETRY_BACKOFF_SECONDS = 0
+            EXPORTER._session.responses = [
+                EXPORTER.requests.RequestException("connection reset by peer"),
+                EXPORTER.requests.RequestException("connection reset by peer"),
+            ]
+
+            with self.assertRaises(EXPORTER.requests.RequestException):
+                EXPORTER._request_with_rest_fallback(
+                    "https://substrate.office.com/ip-domain-management-snds/api/report/data/2026-06-09",
+                    {},
+                    {"Authorization": "Bearer token"},
+                )
+        finally:
+            EXPORTER.REQUEST_RETRY_ATTEMPTS = original_retry_attempts
+            EXPORTER.REQUEST_RETRY_BACKOFF_SECONDS = original_backoff
 
     def test_metrics_query_params_override_rest_request_path(self):
         original_token = EXPORTER.SNDS_ACCESS_TOKEN

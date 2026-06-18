@@ -121,6 +121,10 @@ K8S_NAMESPACE_FILE = os.getenv(
     "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
 )
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "10"))
+REQUEST_RETRY_ATTEMPTS = max(1, int(os.getenv("REQUEST_RETRY_ATTEMPTS", "3")))
+REQUEST_RETRY_BACKOFF_SECONDS = max(
+    0.0, float(os.getenv("REQUEST_RETRY_BACKOFF_SECONDS", "1"))
+)
 CACHE_SECONDS = int(os.getenv("CACHE_SECONDS", "300"))
 VERIFY_TLS = os.getenv("VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
 USER_AGENT = os.getenv("USER_AGENT", "kt-snds-exporter/1.0")
@@ -571,12 +575,10 @@ def _request_with_rest_fallback(
     request_params: dict[str, str],
     request_headers: dict[str, str],
 ) -> requests.Response:
-    response = _session.get(
+    response = _get_with_retry(
         data_url,
-        params=request_params,
-        headers=request_headers,
-        timeout=REQUEST_TIMEOUT,
-        verify=VERIFY_TLS,
+        request_params,
+        request_headers,
     )
     if (
         response.status_code == 404
@@ -584,18 +586,47 @@ def _request_with_rest_fallback(
         and not data_url.endswith("/")
     ):
         retry_url = f"{data_url}/"
-        retry_response = _session.get(
+        retry_response = _get_with_retry(
             retry_url,
-            params=request_params,
-            headers=request_headers,
-            timeout=REQUEST_TIMEOUT,
-            verify=VERIFY_TLS,
+            request_params,
+            request_headers,
         )
         if retry_response.ok:
             logger.info("SNDS REST API succeeded after retrying with trailing slash.")
             return retry_response
         response = retry_response
     return response
+
+
+def _get_with_retry(
+    data_url: str,
+    request_params: dict[str, str],
+    request_headers: dict[str, str],
+) -> requests.Response:
+    last_exc = None
+    for attempt in range(1, REQUEST_RETRY_ATTEMPTS + 1):
+        try:
+            return _session.get(
+                data_url,
+                params=request_params,
+                headers=request_headers,
+                timeout=REQUEST_TIMEOUT,
+                verify=VERIFY_TLS,
+            )
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt >= REQUEST_RETRY_ATTEMPTS:
+                break
+            logger.warning(
+                "SNDS request attempt %s/%s failed for %s: %s",
+                attempt,
+                REQUEST_RETRY_ATTEMPTS,
+                data_url,
+                exc,
+            )
+            if REQUEST_RETRY_BACKOFF_SECONDS > 0:
+                time.sleep(REQUEST_RETRY_BACKOFF_SECONDS * attempt)
+    raise last_exc
 
 
 def _request_with_auth_refresh(
