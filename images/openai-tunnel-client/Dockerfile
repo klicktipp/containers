@@ -16,6 +16,8 @@ ARG TUNNEL_CLIENT_VERSION
 
 WORKDIR /src
 
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+
 RUN apk add --no-cache curl tar
 
 RUN curl --fail --silent --show-error --location \
