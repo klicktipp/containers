@@ -107,11 +107,20 @@ jobs:
             echo "version_minor_prefixed=" >> "${GITHUB_OUTPUT}"
             echo "version_minor=" >> "${GITHUB_OUTPUT}"
             echo "version_plain=" >> "${GITHUB_OUTPUT}"
+            echo "version_semver_prefixed=" >> "${GITHUB_OUTPUT}"
+            echo "version_semver=" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           version="$(arg_value "${version_arg_name}")"
           version_plain="${version#v}"
+          if [[ "${version_plain}" =~ ^([0-9]+\.[0-9]+\.[0-9]+)([-+].*)?$ ]]; then
+            version_semver="${BASH_REMATCH[1]}"
+            version_semver_prefixed="v${version_semver}"
+          else
+            version_semver=""
+            version_semver_prefixed=""
+          fi
           version_major_prefixed="v$(printf '%s\n' "${version_plain}" | cut -d. -f1)"
           version_major="$(printf '%s\n' "${version_plain}" | cut -d. -f1)"
           version_minor_prefixed="v$(printf '%s\n' "${version_plain}" | cut -d. -f1,2)"
@@ -123,6 +132,8 @@ jobs:
           echo "version_minor_prefixed=${version_minor_prefixed}" >> "${GITHUB_OUTPUT}"
           echo "version_minor=${version_minor}" >> "${GITHUB_OUTPUT}"
           echo "version_plain=${version_plain}" >> "${GITHUB_OUTPUT}"
+          echo "version_semver_prefixed=${version_semver_prefixed}" >> "${GITHUB_OUTPUT}"
+          echo "version_semver=${version_semver}" >> "${GITHUB_OUTPUT}"
 
       - name: Generate Docker metadata
         id: meta
@@ -138,7 +149,9 @@ jobs:
             org.opencontainers.image.description=${{ steps.image_meta.outputs.description }}
           tags: |
             type=raw,value=${{ steps.image_meta.outputs.version }},enable=${{ steps.image_meta.outputs.version != '' }}
+            type=raw,value=${{ steps.image_meta.outputs.version_semver_prefixed }},enable=${{ steps.image_meta.outputs.version_semver_prefixed != '' && steps.image_meta.outputs.version_semver_prefixed != steps.image_meta.outputs.version }}
             type=raw,value=${{ steps.image_meta.outputs.version_minor_prefixed }},enable=${{ steps.image_meta.outputs.version_minor_prefixed != '' && steps.image_meta.outputs.version_minor_prefixed != steps.image_meta.outputs.version }}
+            type=raw,value=${{ steps.image_meta.outputs.version_semver }},enable=${{ steps.image_meta.outputs.version_semver != '' && steps.image_meta.outputs.version_semver != steps.image_meta.outputs.version_plain }}
             type=raw,value=${{ steps.image_meta.outputs.version_major_prefixed }},enable=${{ steps.image_meta.outputs.version_major_prefixed != '' && steps.image_meta.outputs.version_major_prefixed != steps.image_meta.outputs.version }}
             type=raw,value=${{ steps.image_meta.outputs.version_plain }},enable=${{ steps.image_meta.outputs.version_plain != '' && steps.image_meta.outputs.version_plain != steps.image_meta.outputs.version }}
             type=raw,value=${{ steps.image_meta.outputs.version_minor }},enable=${{ steps.image_meta.outputs.version_minor != '' }}
