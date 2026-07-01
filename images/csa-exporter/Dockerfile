@@ -1,5 +1,5 @@
 # image-version: CSA_EXPORTER_VERSION
-ARG CSA_EXPORTER_VERSION=0.2.1
+ARG CSA_EXPORTER_VERSION=0.2.2
 ARG IMAGE_DESCRIPTION="Certified Senders Alliance Prometheus exporter"
 ARG IMAGE_AUTHORS="KlickTipp"
 ARG IMAGE_VENDOR="KlickTipp"
