@@ -2,7 +2,7 @@
 # renovate: datasource=github-tags depName=openai/tunnel-client versioning=loose
 ARG TUNNEL_CLIENT_VERSION=v0.0.9--context-conduit-topaz
 ARG GO_BUILDER_IMAGE=golang:1.26.2-alpine
-ARG UI_BUILDER_IMAGE=node:22-alpine
+ARG UI_BUILDER_IMAGE=node:24-alpine
 ARG RUNTIME_IMAGE=alpine:3.23
 ARG PNPM_FALLBACK_VERSION=pnpm@11.4.0+sha512.f0febc7e37552ab485494a914241b338e0b3580b93d54ce31f00933015880863129038a1b4ae4e414a0ee63ac35bf21197e990172c4a68256450b5636310968f
 ARG IMAGE_DESCRIPTION="OpenAI Secure MCP Tunnel client"
