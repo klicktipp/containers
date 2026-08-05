@@ -10,11 +10,20 @@ minimum, average, and maximum plus the underlying email volume for each scope.
 
 ## Complaint Metrics
 
-- `csa_spam_complaint_rate{scope,entity,statistic}`: CSA-provided complaint
-  rate. `scope` is `global`, `ip`, `dkimdomain`, or `fromdomain`, and
-  `statistic` is `min`, `avg`, or `max`.
+- `csa_spam_complaint_rate{scope="global",entity="global",statistic}`:
+  CSA-provided global complaint rate; `statistic` is `min`, `avg`, or `max`.
 - `csa_spam_complaint_total_volume{scope,entity}`: Email volume underlying the
-  complaint-rate calculation.
+  global complaint-rate calculation.
+- `csa_ip_spam_click_ratio{ip}`: Reported complaint ratio per sending IP.
+- `csa_dkim_spam_click_ratio{domain}`: Reported complaint ratio per DKIM
+  domain.
+- `csa_from_domain_spam_click_ratio{domain}`: Reported complaint ratio per
+  header-from domain.
+
+The scoped `/stat/spamclickrate/{scope}` detail endpoints currently return HTTP
+404 for `ip`, `dkimdomain`, and `fromdomain` with production API credentials.
+The exporter therefore uses the working KPI endpoints for those scopes and
+avoids repeated failing requests.
 
 The CSA API does not provide an exact absolute mailbox-provider complaint count
 in these responses. The exporter intentionally does not derive one by

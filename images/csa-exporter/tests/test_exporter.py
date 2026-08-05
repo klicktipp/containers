@@ -382,16 +382,16 @@ class ExporterTests(unittest.TestCase):
             80,
         )
         self.assertEqual(
-            self.exporter.spam_complaint_rate_gauge.labels(
-                scope="ip", entity="192.0.2.10", statistic="avg"
+            self.exporter.spam_complaint_volume_gauge.labels(
+                scope="global", entity="global"
             )._value.get(),
-            0.5,
+            1000,
         )
         self.assertEqual(
-            self.exporter.spam_complaint_volume_gauge.labels(
-                scope="dkimdomain", entity="example.com"
+            self.exporter.ip_spam_click_ratio_gauge.labels(
+                ip="192.0.2.10"
             )._value.get(),
-            100,
+            0.5,
         )
         self.assertEqual(
             self.exporter.alignment_gauge.labels(

@@ -541,31 +541,23 @@ def fetch_kpi_ip_metrics(date_str: Optional[str]) -> None:
 
 
 def fetch_spam_complaint_rates(date_str: Optional[str]) -> None:
-    """Fetch detailed complaint-rate statistics for all supported entity scopes."""
+    """Fetch global complaint-rate statistics from the supported detail endpoint."""
 
     spam_complaint_rate_gauge.clear()
     spam_complaint_volume_gauge.clear()
     if not date_str:
         return
 
-    for scope in ("global", "dkimdomain", "fromdomain", "ip"):
-        data = _get_json(f"/stat/spamclickrate/{scope}", {"date": date_str})
-        if not data:
-            continue
-
-        entities = {"global": data} if scope == "global" else data
-        if not isinstance(entities, dict):
-            continue
-        for entity, values in entities.items():
-            if not isinstance(values, dict):
-                continue
-            for statistic in ("min", "avg", "max"):
-                spam_complaint_rate_gauge.labels(
-                    scope=scope, entity=str(entity), statistic=statistic
-                ).set(_to_float(values.get(statistic)))
-            spam_complaint_volume_gauge.labels(scope=scope, entity=str(entity)).set(
-                _to_float(values.get("total_volume"))
-            )
+    values = _get_json("/stat/spamclickrate/global", {"date": date_str})
+    if not isinstance(values, dict):
+        return
+    for statistic in ("min", "avg", "max"):
+        spam_complaint_rate_gauge.labels(
+            scope="global", entity="global", statistic=statistic
+        ).set(_to_float(values.get(statistic)))
+    spam_complaint_volume_gauge.labels(scope="global", entity="global").set(
+        _to_float(values.get("total_volume"))
+    )
 
 
 def fetch_alignment_details(date_str: Optional[str]) -> None:
@@ -575,7 +567,9 @@ def fetch_alignment_details(date_str: Optional[str]) -> None:
     if not date_str:
         return
 
-    for scope in ("global", "dkimdomain", "fromdomain", "ip"):
+    # The CSA endpoint currently returns HTTP 500 for the IP scope. IP alignment
+    # is still exported from /stat/kpi/ip, so avoid a redundant failing request.
+    for scope in ("global", "dkimdomain", "fromdomain"):
         data = _get_json(f"/stat/aligned/{scope}", {"date": date_str})
         if not data:
             continue
