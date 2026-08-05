@@ -8,3 +8,6 @@ DISABLE_LINTERS:
   - MAKEFILE_CHECKMAKE
 SHOW_ELAPSED_TIME: true
 CLEAR_REPORT_FOLDER: true
+PYTHON_PYLINT_CONFIG_FILE: images/csa-exporter/.pylintrc
+PYTHON_PYRIGHT_CONFIG_FILE: images/csa-exporter/pyrightconfig.json
+SPELL_CSPELL_CONFIG_FILE: images/csa-exporter/cspell.json

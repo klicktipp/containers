@@ -4,6 +4,32 @@
 
 It fetches the latest available CSA metrics, converts them into Prometheus gauges, and exposes them on port `9100`.
 
+The exporter collects KPI details grouped by sending IP, DKIM domain, and
+header-from domain. It also exports the CSA spam complaint rate as the reported
+minimum, average, and maximum plus the underlying email volume for each scope.
+
+## Complaint Metrics
+
+- `csa_spam_complaint_rate{scope,entity,statistic}`: CSA-provided complaint
+  rate. `scope` is `global`, `ip`, `dkimdomain`, or `fromdomain`, and
+  `statistic` is `min`, `avg`, or `max`.
+- `csa_spam_complaint_total_volume{scope,entity}`: Email volume underlying the
+  complaint-rate calculation.
+
+The CSA API does not provide an exact absolute mailbox-provider complaint count
+in these responses. The exporter intentionally does not derive one by
+multiplying an aggregate rate by volume because that would not be guaranteed to
+represent an exact count. The separate `csa_complaints` API describes legal CSA
+complaints and cases and is not treated as the spam complaint rate.
+
+`csa_legal_complaints{scope,brand,kind}` separately exposes exact absolute CSA
+legal complaint and case counts. It contains only aggregate global or brand
+counts and never exports complainants, subjects, report IDs, or other complaint
+record details.
+
+KPI metrics additionally expose email volume, alignment, DKIM errors, missing
+DKIM, spam traps, complaint ratio, and the CSA-limit status for IPs and domains.
+
 ## Repository Fit
 
 This image is intended to be built and published by the repository-wide GitHub Actions workflows in the repository root.
@@ -14,7 +40,7 @@ The image metadata and version tags are derived from `Dockerfile`.
 
 ### Required Configuration
 
-- `CSA_API_TOKEN`: Base64 token from the CSA UI, without the `ApiKey ` prefix.
+- `CSA_API_TOKEN`: Base64 token from the CSA UI, without the `ApiKey` prefix.
 
 Or:
 
@@ -25,6 +51,8 @@ Or:
 
 - `CSA_API_URL`: CSA API base URL. Default: `https://monitor.certified-senders.org/api/v1`
 - `CSA_API_TIMEOUT`: HTTP timeout in seconds. Default: `10`
+- `CSA_COMPLAINT_LOOKBACK_DAYS`: Lookback for legal complaint counts grouped by
+  brand. Default: `30`
 - `LOG_LEVEL`: Python log level. Default: `INFO`
 - `PORT`: HTTP listen port. Default: `9100`
 

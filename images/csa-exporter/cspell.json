@@ -1,0 +1,29 @@
+{
+  "version": "0.2",
+  "words": [
+    "addgroup",
+    "adduser",
+    "CHECKMAKE",
+    "dkimdomain",
+    "dkimerrors",
+    "fromdomain",
+    "healthz",
+    "ingroup",
+    "iprdev",
+    "iprdeviation",
+    "labelnames",
+    "livez",
+    "lookback",
+    "noninteractive",
+    "pylint",
+    "pylintrc",
+    "pyrightconfig",
+    "PYTHONDONTWRITEBYTECODE",
+    "PYTHONUNBUFFERED",
+    "rootfs",
+    "scrdev",
+    "scrdeviation",
+    "spamclickrate",
+    "spamtrap"
+  ]
+}

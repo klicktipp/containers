@@ -1,0 +1,5 @@
+[MAIN]
+ignore-paths=images/csa-exporter/tests/test_exporter.py
+
+[MESSAGES CONTROL]
+disable=import-error

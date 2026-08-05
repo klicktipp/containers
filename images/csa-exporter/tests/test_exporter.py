@@ -175,7 +175,11 @@ class ExporterTests(unittest.TestCase):
     def test_build_authorization_header_prefers_explicit_header(self):
         with mock.patch.dict(
             self.exporter.os.environ,
-            {"CSA_API_TOKEN": "abc", "CSA_API_ID": "name", "CSA_API_SECRET": "secret"},
+            {  # nosec B105 - deliberately fake test credentials
+                "CSA_API_TOKEN": "abc",
+                "CSA_API_ID": "name",
+                "CSA_API_SECRET": "secret",
+            },
             clear=True,
         ):
             self.exporter.API_TOKEN = self.exporter.os.getenv(
@@ -190,7 +194,10 @@ class ExporterTests(unittest.TestCase):
     def test_build_authorization_header_uses_base64_name_and_key(self):
         with mock.patch.dict(
             self.exporter.os.environ,
-            {"CSA_API_ID": "name", "CSA_API_SECRET": "secret"},
+            {  # nosec B105 - deliberately fake test credentials
+                "CSA_API_ID": "name",
+                "CSA_API_SECRET": "secret",
+            },
             clear=True,
         ):
             self.exporter.API_TOKEN = self.exporter.os.getenv(
@@ -211,7 +218,48 @@ class ExporterTests(unittest.TestCase):
 
     def test_metrics_endpoint_updates_expected_gauges(self):
         json_by_path = {
-            "/stat/dkimerrors/global": {"errors": 7},
+            "/stat/dkimerrors/global": {"errors": 7, "total_volume": 1000},
+            "/stat/dkimerrors/dkimdomain": {
+                "example.com": {"errors": 1, "total_volume": 100}
+            },
+            "/stat/dkimerrors/fromdomain": {
+                "news.example.com": {"errors": 2, "total_volume": 80}
+            },
+            "/stat/dkimerrors/ip": {"192.0.2.10": {"errors": 2, "total_volume": 50}},
+            "/stat/aligned/global": {
+                "aligned": 900,
+                "non_aligned": 100,
+                "simple_relaxed": 850,
+                "simple_strict": 50,
+                "total_volume": 1000,
+            },
+            "/stat/aligned/dkimdomain": {
+                "example.com": {
+                    "aligned": 90,
+                    "non_aligned": 10,
+                    "simple_relaxed": 80,
+                    "simple_strict": 10,
+                    "total_volume": 100,
+                }
+            },
+            "/stat/aligned/fromdomain": {
+                "news.example.com": {
+                    "aligned": 70,
+                    "non_aligned": 10,
+                    "simple_relaxed": 60,
+                    "simple_strict": 10,
+                    "total_volume": 80,
+                }
+            },
+            "/stat/aligned/ip": {
+                "192.0.2.10": {
+                    "aligned": 45,
+                    "non_aligned": 5,
+                    "simple_relaxed": 40,
+                    "simple_strict": 5,
+                    "total_volume": 50,
+                }
+            },
             "/stat/kpi/dkimdomain": [
                 {
                     "dkim_domain": "example.com",
@@ -220,6 +268,22 @@ class ExporterTests(unittest.TestCase):
                     "non_aligned": 3,
                     "spam_click_ratio": 0.25,
                     "spam_traps": 2,
+                    "email_volume": 100,
+                    "dkim_missing": 4,
+                    "above_csa_limit": True,
+                }
+            ],
+            "/stat/kpi/fromdomain": [
+                {
+                    "from_domain": "news.example.com",
+                    "email_volume": 80,
+                    "spam_traps": 1,
+                    "dkim_errors": 2,
+                    "dkim_missing": 3,
+                    "aligned": 70,
+                    "non_aligned": 10,
+                    "spam_click_ratio": 0.125,
+                    "above_csa_limit": False,
                 }
             ],
             "/stat/kpi/ip": [
@@ -231,7 +295,45 @@ class ExporterTests(unittest.TestCase):
                     "non_aligned": 4,
                     "spam_click_ratio": 0.5,
                     "spam_traps": 3,
+                    "email_volume": 50,
+                    "above_csa_limit": True,
                 }
+            ],
+            "/stat/spamclickrate/global": {
+                "min": 0.1,
+                "avg": 0.2,
+                "max": 0.3,
+                "total_volume": 1000,
+            },
+            "/stat/spamclickrate/dkimdomain": {
+                "example.com": {
+                    "min": 0.2,
+                    "avg": 0.3,
+                    "max": 0.4,
+                    "total_volume": 100,
+                }
+            },
+            "/stat/spamclickrate/fromdomain": {
+                "news.example.com": {
+                    "min": 0.3,
+                    "avg": 0.4,
+                    "max": 0.5,
+                    "total_volume": 80,
+                }
+            },
+            "/stat/spamclickrate/ip": {
+                "192.0.2.10": {
+                    "min": 0.4,
+                    "avg": 0.5,
+                    "max": 0.6,
+                    "total_volume": 50,
+                }
+            },
+            "/csa_complaints/brands/complaints": [
+                {"brand": "Example Brand", "amount": 4, "alert_status": "WARNING"}
+            ],
+            "/csa_complaints/brands/cases": [
+                {"brand": "Example Brand", "amount": 2, "alert_status": "OK"}
             ],
             "/stat/anomaly/iprdeviation": [{"date": "2026-06-15", "iprdev": 1.5}],
             "/stat/anomaly/scrdeviation": [{"date": "2026-06-15", "scrdev": 0.75}],
@@ -239,6 +341,8 @@ class ExporterTests(unittest.TestCase):
         text_by_path = {
             "/stat": "2026-06-15",
             "/stat/spamtrap/global": "11",
+            "/csa_complaints/global/complaints": "4",
+            "/csa_complaints/global/cases": "2",
         }
 
         def fake_request(path, params=None):
@@ -271,6 +375,44 @@ class ExporterTests(unittest.TestCase):
             self.exporter.ip_dkim_missing_gauge.labels(ip="192.0.2.10")._value.get(),
             1,
         )
+        self.assertEqual(
+            self.exporter.from_email_volume_gauge.labels(
+                domain="news.example.com"
+            )._value.get(),
+            80,
+        )
+        self.assertEqual(
+            self.exporter.spam_complaint_rate_gauge.labels(
+                scope="ip", entity="192.0.2.10", statistic="avg"
+            )._value.get(),
+            0.5,
+        )
+        self.assertEqual(
+            self.exporter.spam_complaint_volume_gauge.labels(
+                scope="dkimdomain", entity="example.com"
+            )._value.get(),
+            100,
+        )
+        self.assertEqual(
+            self.exporter.alignment_gauge.labels(
+                scope="fromdomain",
+                entity="news.example.com",
+                result="simple_relaxed",
+            )._value.get(),
+            60,
+        )
+        self.assertEqual(
+            self.exporter.dkim_detail_gauge.labels(
+                scope="ip", entity="192.0.2.10", statistic="total_volume"
+            )._value.get(),
+            50,
+        )
+        self.assertEqual(
+            self.exporter.legal_complaints_gauge.labels(
+                scope="brand", brand="Example Brand", kind="complaints"
+            )._value.get(),
+            4,
+        )
 
     def test_main_uses_waitress_configuration(self):
         with mock.patch.dict(
@@ -280,7 +422,9 @@ class ExporterTests(unittest.TestCase):
         ):
             self.exporter.serve(
                 self.exporter.app,
-                host=self.exporter.os.getenv("HOST", "0.0.0.0"),
+                host=self.exporter.os.getenv(
+                    "HOST", "0.0.0.0"  # nosec B104 - verifies container default
+                ),
                 port=int(self.exporter.os.getenv("PORT", "9100")),
                 threads=int(self.exporter.os.getenv("WAITRESS_THREADS", "4")),
             )

@@ -1,0 +1,5 @@
+{
+  "exclude": ["tests"],
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false
+}
