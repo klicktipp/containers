@@ -1,6 +1,6 @@
 # image-version: TUNNEL_CLIENT_VERSION
 # renovate: datasource=github-tags depName=openai/tunnel-client versioning=loose
-ARG TUNNEL_CLIENT_VERSION=v0.0.10
+ARG TUNNEL_CLIENT_VERSION=v0.0.11
 ARG GO_BUILDER_IMAGE=golang:1.26.2-alpine
 ARG UI_BUILDER_IMAGE=node:24-alpine
 ARG RUNTIME_IMAGE=alpine:3.23
