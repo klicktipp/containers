@@ -12,7 +12,7 @@ ARG IMAGE_SOURCE="https://github.com/klicktipp/containers"
 RUN curl --fail --silent --show-error --location --output /tmp/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
     && chmod 0755 /tmp/kubectl
 
-FROM alpine:3.23
+FROM alpine:3.24
 
 ARG IMAGE_DESCRIPTION
 ARG IMAGE_AUTHORS
