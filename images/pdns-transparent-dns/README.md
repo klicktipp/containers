@@ -42,7 +42,14 @@ This script is a good fit for an init container.
 
 `interceptor.sh` continuously watches whether a process is listening on `DNS_PORT` (default: `53`).
 
-When a listener is detected, it installs dedicated `iptables` rules and jump chains for the configured takeover IPs. When the listener disappears, it removes those rules again. On shutdown it also removes the previously added loopback takeover IPs.
+When a listener on `LOCAL_IP:DNS_PORT` is detected, it installs dedicated `iptables` rules and jump chains for the configured takeover IPs. When the listener disappears, it removes those rules again.
+
+On `SIGTERM` it stops in two steps:
+
+1. It removes the rules for `SERVICE_IP` at once. kube-proxy then sends that traffic to CoreDNS again.
+2. It keeps the rules for the other takeover IPs until the recursor stops listening (at most `STOP_WAIT_SECONDS`). Then it removes all rules and the loopback takeover IPs.
+
+For a stop without DNS errors, the recursor must answer for some seconds after the interceptor gets `SIGTERM`, for example with a `preStop` sleep on the recursor container.
 
 This script is a good fit for a long-running sidecar or helper container.
 
@@ -57,7 +64,7 @@ At a high level, the container does the following:
    - mark DNS traffic as `NOTRACK` in the `raw` table
    - explicitly allow DNS traffic in the `filter` table
    - attach the custom chains through jumps in `PREROUTING`, `INPUT`, and `OUTPUT`
-5. Remove all rules and takeover IPs again when the process stops.
+5. On stop, hand `SERVICE_IP` back to CoreDNS first, then remove all rules and takeover IPs when the recursor is gone.
 
 The rules can cover both inbound traffic to the selected target IPs and, by default, matching output traffic as well.
 
@@ -79,6 +86,7 @@ The rules can cover both inbound traffic to the selected target IPs and, by defa
 - `PRIMARY_SERVICE_IP`: Additional PowerDNS Service IP to manage.
 - `SETUP_IPTABLES`: When `true`, install and remove `iptables` rules dynamically. Default: `true`.
 - `CAPTURE_OUTPUT`: When `true`, also add `OUTPUT` rules for destination traffic. Default: `true`.
+- `STOP_WAIT_SECONDS`: On `SIGTERM`, maximum time to wait for the recursor to stop before the remaining rules are removed. Keep it below the pod's termination grace period. Default: `20`.
 
 ## Operational Notes
 
