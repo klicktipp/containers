@@ -10,6 +10,7 @@ PRIMARY_SERVICE_IP="${PRIMARY_SERVICE_IP:-}"
 ADDITIONAL_SERVICE_IP="${ADDITIONAL_SERVICE_IP:-}"
 SETUP_IPTABLES="${SETUP_IPTABLES:-true}"
 CAPTURE_OUTPUT="${CAPTURE_OUTPUT:-true}"
+STOP_WAIT_SECONDS="${STOP_WAIT_SECONDS:-20}"
 
 log() {
 	prefix="${LOG_PREFIX:-dns-interceptor}"
@@ -59,8 +60,10 @@ require_local_ip() {
 	log "confirmed ip ${ip_addr}/32 on lo"
 }
 
+# Match only the recursor's own LOCAL_IP listener, not other :53 listeners on the host.
 is_recursor_ready() {
-	ss -H -ltnu 2>/dev/null | grep -Eq "(^udp|^tcp).*:${DNS_PORT}[[:space:]]"
+	local_ip_re="$(printf '%s' "${LOCAL_IP}" | sed 's/\./\\./g')"
+	ss -H -ltnu 2>/dev/null | grep -Eq "^(udp|tcp)[[:space:]].*[[:space:]]${local_ip_re}:${DNS_PORT}[[:space:]]"
 }
 
 ensure_raw_chain() {
@@ -167,6 +170,27 @@ remove_ip_rules_and_jumps() {
 	remove_jump filter tcp INPUT "${FILTER_CHAIN}" destination "${target_ip}"
 	remove_jump filter udp OUTPUT "${FILTER_CHAIN}" source "${target_ip}"
 	remove_jump filter tcp OUTPUT "${FILTER_CHAIN}" source "${target_ip}"
+}
+
+# The cluster DNS Service IP is the only takeover IP with a fallback: without its
+# rules, kube-proxy DNATs the traffic to CoreDNS again.
+release_service_ip() {
+	if [ "${TAKEOVER_CLUSTER_IP}" = "true" ] && [ -n "${SERVICE_IP:-}" ]; then
+		remove_ip_rules_and_jumps "${SERVICE_IP}"
+	fi
+}
+
+wait_for_recursor_stop() {
+	waited=0
+	while is_recursor_ready; do
+		if [ "${waited}" -ge "${STOP_WAIT_SECONDS}" ]; then
+			log "recursor still listening after ${waited}s, continuing shutdown"
+			return 0
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+	log "recursor listener gone after ${waited}s"
 }
 
 install_rules() {

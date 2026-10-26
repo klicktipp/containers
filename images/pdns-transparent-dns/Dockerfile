@@ -1,5 +1,5 @@
 # image-version: DNS_INTERCEPTOR_VERSION
-ARG DNS_INTERCEPTOR_VERSION=0.1.2
+ARG DNS_INTERCEPTOR_VERSION=0.1.3
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
 ARG IMAGE_DESCRIPTION="Transparent DNS interceptor"
