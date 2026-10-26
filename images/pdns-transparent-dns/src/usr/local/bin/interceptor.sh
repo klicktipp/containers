@@ -2,7 +2,9 @@
 
 set -eu
 
+# shellcheck disable=SC2034 # read by log() in common.sh
 LOG_PREFIX="dns-interceptor"
+# shellcheck source=/dev/null
 . /usr/local/lib/pdns-transparent-dns/common.sh
 
 service_ip_active=0
