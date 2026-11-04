@@ -8,6 +8,11 @@
       "matchPackageNames": ["kubernetes/kubernetes"],
       "matchFileNames": ["images/kubectl/Dockerfile"],
       "automerge": true
+    },
+    {
+      "matchPackageNames": ["openai/tunnel-client"],
+      "matchFileNames": ["images/openai-tunnel-client/Dockerfile"],
+      "automerge": true
     }
   ],
   "customManagers": [
