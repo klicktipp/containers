@@ -64,6 +64,8 @@ ARG IMAGE_SOURCE
 
 WORKDIR /app
 
+ENV MCP_STARTUP_WAIT_TIMEOUT=5m
+
 RUN apk add --no-cache ca-certificates
 
 LABEL org.opencontainers.image.authors="${IMAGE_AUTHORS}" \
