@@ -1,8 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:best-practices"],
+  "extends": [
+    "config:recommended",
+    "config:best-practices"
+  ],
+  "addLabels": ["{{updateType}}"],
   "semanticCommits": "enabled",
-  "ignorePresets": ["docker:pinDigests", ":pinDevDependencies"],
   "packageRules": [
     {
       "matchPackageNames": ["kubernetes/kubernetes"],
