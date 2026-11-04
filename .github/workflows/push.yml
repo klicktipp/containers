@@ -187,6 +187,8 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.context }}/Dockerfile
           platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=${{ matrix.name }},version=2
+          cache-to: type=gha,scope=${{ matrix.name }},version=2,mode=max
           push: true
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}

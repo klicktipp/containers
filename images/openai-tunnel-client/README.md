@@ -10,6 +10,18 @@ This image is intended to be built and published by the repository-wide GitHub A
 
 The image metadata and version tags are derived from `Dockerfile`.
 
+## Multi-platform Builds
+
+Source download and UI compilation run on the builder's native platform. The UI
+assets are shared by both target architectures, and Go cross-compiles the client
+using BuildKit's `TARGETOS` and `TARGETARCH` arguments with CGO disabled. Only the
+final runtime stage uses the target platform, avoiding emulated UI and Go builds.
+
+The pull request and publishing workflows import and export GitHub Actions build
+caches with a separate scope for each image. Intermediate stages are cached with
+`mode=max`; Go cache mounts remain local to the builder and are not exported by
+the GitHub Actions cache backend.
+
 ## Runtime Behavior
 
 The image entrypoint is:
@@ -63,4 +75,16 @@ Build the image locally from the repository root:
 
 ```sh
 docker build -t local/openai-tunnel-client:latest images/openai-tunnel-client
+```
+
+Validate both supported architectures without pushing to a registry using a
+`docker-container` builder (required for OCI export):
+
+```sh
+docker buildx create --name tunnel-client-builder --driver docker-container
+docker buildx build --builder tunnel-client-builder \
+  --platform linux/amd64,linux/arm64 \
+  --output type=oci,dest=/tmp/openai-tunnel-client.oci.tar \
+  images/openai-tunnel-client
+docker buildx rm tunnel-client-builder
 ```

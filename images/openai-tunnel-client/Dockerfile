@@ -10,7 +10,7 @@ ARG IMAGE_AUTHORS="KlickTipp"
 ARG IMAGE_VENDOR="KlickTipp"
 ARG IMAGE_SOURCE="https://github.com/klicktipp/containers"
 
-FROM alpine:3.24 AS source
+FROM --platform=$BUILDPLATFORM alpine:3.24 AS source
 
 ARG TUNNEL_CLIENT_VERSION
 
@@ -24,7 +24,7 @@ RUN curl --fail --silent --show-error --location \
     "https://codeload.github.com/openai/tunnel-client/tar.gz/refs/tags/${TUNNEL_CLIENT_VERSION}" \
     | tar -xz --strip-components=1
 
-FROM ${UI_BUILDER_IMAGE} AS ui-builder
+FROM --platform=$BUILDPLATFORM ${UI_BUILDER_IMAGE} AS ui-builder
 
 ARG PNPM_FALLBACK_VERSION
 
@@ -38,9 +38,11 @@ RUN package_manager="$(node -e 'const fs = require("fs"); const path = "/src/pac
     && CI=true pnpm --dir adminui install --frozen-lockfile --config.shared-workspace-lockfile=false --config.confirmModulesPurge=false \
     && pnpm --dir adminui build
 
-FROM ${GO_BUILDER_IMAGE} AS builder
+FROM --platform=$BUILDPLATFORM ${GO_BUILDER_IMAGE} AS builder
 
 ARG TUNNEL_CLIENT_VERSION
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -49,7 +51,7 @@ COPY --from=ui-builder /src/pkg/adminui/assets /src/pkg/adminui/assets
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -trimpath \
     -ldflags "-s -w -X go.openai.org/api/tunnel-client/pkg/version.GitSHA=${TUNNEL_CLIENT_VERSION}" \
     -o /usr/local/bin/tunnel-client ./cmd/client
