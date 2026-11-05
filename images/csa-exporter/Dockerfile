@@ -5,7 +5,7 @@ ARG IMAGE_AUTHORS="KlickTipp"
 ARG IMAGE_VENDOR="KlickTipp"
 ARG IMAGE_SOURCE="https://github.com/klicktipp/containers"
 
-FROM python:3.14-slim
+FROM python:3.15-slim@sha256:e97b88e416c3c01eb427b21fd8cd3ebf006e6ee38afcfcc3cae1c54ee2ab0a75
 
 ARG CSA_EXPORTER_VERSION
 ARG IMAGE_DESCRIPTION
